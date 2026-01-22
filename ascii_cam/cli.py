@@ -49,6 +49,7 @@ Keyboard Controls:
   b           Toggle braille mode
   i           Toggle invert
   r           Toggle recording
+  a           Toggle auto-resize (follow terminal size)
   + / -       Adjust width
   [ / ]       Adjust brightness
   { / }       Adjust contrast
@@ -141,6 +142,8 @@ class ASCIICamApp:
         self._running = False
         self._paused = False
         self._show_help = False
+        self._auto_resize = True  # Auto-adapt to terminal size
+        self._last_terminal_size = Display.get_terminal_size()
 
     def _setup_signal_handlers(self):
         """Set up signal handlers for graceful shutdown."""
@@ -214,6 +217,20 @@ class ASCIICamApp:
         print("\nCamera stream ended.")
         return 0
 
+    def _check_terminal_resize(self):
+        """Check if terminal was resized and update width if auto-resize enabled."""
+        if not self._auto_resize:
+            return
+
+        current_size = Display.get_terminal_size()
+        if current_size != self._last_terminal_size:
+            self._last_terminal_size = current_size
+            new_width = max(20, current_size[0] - 2)
+            if new_width != self.width:
+                self.width = new_width
+                self.converter.width = new_width
+                self.display.clear()  # Clear to prevent artifacts
+
     def _camera_loop(self, camera: Camera, term):
         """Main camera loop with keyboard input."""
         while self._running:
@@ -226,6 +243,9 @@ class ASCIICamApp:
             if self._show_help:
                 self._display_help()
                 continue
+
+            # Check for terminal resize
+            self._check_terminal_resize()
 
             if not self._paused:
                 frame = camera.read()
@@ -247,6 +267,9 @@ class ASCIICamApp:
     def _camera_loop_simple(self, camera: Camera):
         """Simple camera loop without keyboard input."""
         while self._running:
+            # Check for terminal resize
+            self._check_terminal_resize()
+
             frame = camera.read()
             if frame is None:
                 break
@@ -298,6 +321,11 @@ class ASCIICamApp:
             self.converter.charset = charset
         elif key_char == 's':
             self._save_screenshot()
+        elif key_char == 'a':
+            self._auto_resize = not self._auto_resize
+            if self._auto_resize:
+                # Immediately resize to current terminal size
+                self._check_terminal_resize()
         elif key_char in ('h', '?'):
             self._show_help = not self._show_help
         elif key_char == ' ':
@@ -338,6 +366,8 @@ class ASCIICamApp:
             f"C:{self.contrast:.1f}",
         ]
 
+        if self._auto_resize:
+            parts.append("AUTO")
         if self.color:
             parts.append("COLOR")
         if self.edge_mode:
@@ -612,6 +642,7 @@ def cmd_browse(args):
     """Handle browser rendering command."""
     try:
         from .browser import BrowserRenderer, AgentBrowserContext
+        from .converter import CharacterSets
     except ImportError as e:
         print(f"Error: {e}")
         print("Install Playwright with: pip install playwright && playwright install")
@@ -623,22 +654,38 @@ def cmd_browse(args):
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
 
-    print(f"Rendering: {url}")
+    mode = getattr(args, 'mode', 'visual')
+    print(f"Rendering ({mode} mode): {url}")
     print("Please wait...")
+
+    # Map charset name to charset
+    charset_map = {
+        'standard': CharacterSets.STANDARD,
+        'detailed': CharacterSets.DETAILED,
+        'blocks': CharacterSets.BLOCKS,
+        'minimal': CharacterSets.MINIMAL,
+        'braille': 'braille'
+    }
+    charset = charset_map.get(getattr(args, 'charset', 'blocks'), CharacterSets.BLOCKS)
+    color = not getattr(args, 'no_color', False)
+    full_page = getattr(args, 'full_page', False)
 
     try:
         if args.agent:
-            # Agent context mode
+            # Agent context mode (uses semantic)
             agent = AgentBrowserContext(width=args.width, headless=not args.visible)
             output = agent.get_page_context(url=url, task=args.task)
         else:
-            # Simple render mode
+            # Render mode
             renderer = BrowserRenderer(
                 width=args.width,
                 headless=not args.visible,
-                browser_type=args.browser
+                browser_type=args.browser,
+                mode=mode,
+                charset=charset,
+                color=color
             )
-            output = renderer.render_url(url)
+            output = renderer.render_url(url, full_page=full_page)
 
         if args.output:
             with open(args.output, 'w', encoding='utf-8') as f:
@@ -653,6 +700,8 @@ def cmd_browse(args):
 
     except Exception as e:
         print(f"Error rendering page: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
     return 0
@@ -745,12 +794,18 @@ def main():
     llm_parser.set_defaults(func=cmd_llm)
 
     # Browse command
-    browse_parser = subparsers.add_parser("browse", aliases=["web"], help="Render website as semantic ASCII")
+    browse_parser = subparsers.add_parser("browse", aliases=["web"], help="Render website as ASCII art")
     browse_parser.add_argument("url", help="URL to render")
     browse_parser.add_argument("-o", "--output", help="Output file (prints to stdout if not specified)")
-    browse_parser.add_argument("-w", "--width", type=int, default=100, help="ASCII width")
+    browse_parser.add_argument("-w", "--width", type=int, default=120, help="ASCII width (default: 120)")
+    browse_parser.add_argument("-m", "--mode", choices=["visual", "semantic"], default="visual",
+                              help="Rendering mode: visual (screenshot ASCII) or semantic (DOM text)")
+    browse_parser.add_argument("-c", "--charset", choices=["standard", "detailed", "blocks", "braille", "minimal"],
+                              default="blocks", help="Character set for visual mode (default: blocks)")
+    browse_parser.add_argument("--no-color", action="store_true", help="Disable color output")
+    browse_parser.add_argument("--full-page", action="store_true", help="Capture full scrollable page")
     browse_parser.add_argument("-t", "--task", help="Task description for agent context")
-    browse_parser.add_argument("--agent", action="store_true", help="Include agent action suggestions")
+    browse_parser.add_argument("--agent", action="store_true", help="Include agent action suggestions (uses semantic)")
     browse_parser.add_argument("--visible", action="store_true", help="Show browser window (not headless)")
     browse_parser.add_argument("--browser", choices=["chromium", "firefox", "webkit"], default="chromium",
                               help="Browser to use")

@@ -264,12 +264,15 @@ class ASCIIVideoPlayer:
             )
 
         self.display = Display()
+        self.width = width
 
         # Playback state
         self._playing = False
         self._paused = False
         self._speed = 1.0
         self._current_frame = 0
+        self._auto_resize = True
+        self._last_terminal_size = Display.get_terminal_size()
 
     def play(self, start_time: float = 0.0):
         """
@@ -302,6 +305,20 @@ class ASCIIVideoPlayer:
 
         self.reader.close()
 
+    def _check_terminal_resize(self):
+        """Check if terminal was resized and update width."""
+        if not self._auto_resize:
+            return
+
+        current_size = Display.get_terminal_size()
+        if current_size != self._last_terminal_size:
+            self._last_terminal_size = current_size
+            new_width = max(20, current_size[0] - 2)
+            if new_width != self.width:
+                self.width = new_width
+                self.converter.width = new_width
+                self.display.clear()
+
     def _playback_loop(self, term):
         """Main playback loop with keyboard controls."""
         info = self.reader.info
@@ -316,6 +333,9 @@ class ASCIIVideoPlayer:
             key = term.inkey(timeout=0)
             if key:
                 self._handle_key(key)
+
+            # Check for terminal resize
+            self._check_terminal_resize()
 
             if not self._paused:
                 frame = self.reader.read_frame()
@@ -354,6 +374,9 @@ class ASCIIVideoPlayer:
 
             start_time = time.time()
 
+            # Check for terminal resize
+            self._check_terminal_resize()
+
             rgb_frame = frame.image[:, :, ::-1]
             image = Image.fromarray(rgb_frame)
             ascii_art = self.converter.convert(image)
@@ -377,6 +400,10 @@ class ASCIIVideoPlayer:
             self._playing = False
         elif key_str == ' ':
             self._paused = not self._paused
+        elif key_str == 'a':
+            self._auto_resize = not self._auto_resize
+            if self._auto_resize:
+                self._check_terminal_resize()
         elif key.name == 'KEY_RIGHT':
             # Seek forward 5 seconds
             info = self.reader.info
@@ -406,12 +433,15 @@ class ASCIIVideoPlayer:
         # Status indicators
         status = "▶" if not self._paused else "⏸"
         speed = f"{self._speed:.2f}x" if self._speed != 1.0 else ""
+        auto = "AUTO" if self._auto_resize else ""
 
         parts = [
             f"{status} {current_str}/{duration_str}",
             f"[{bar}]",
+            f"W:{self.width}",
+            auto,
             speed,
-            "[q]uit [space]pause [←→]seek"
+            "[q]uit [space]pause [a]uto-size"
         ]
 
         return "\033[90m" + " ".join(filter(None, parts)) + "\033[0m"

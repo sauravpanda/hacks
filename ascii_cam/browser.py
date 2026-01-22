@@ -1,21 +1,23 @@
 """
-Semantic ASCII Browser Renderer.
-
-Renders web pages as structured ASCII art that preserves:
-- DOM hierarchy and semantic structure
-- Interactive elements (buttons, links, inputs, forms)
-- Approximate visual layout
-- Element selectors for AI agent actions
+ASCII Browser Renderer.
 
 Two rendering modes:
-- Visual: Pixel-based ASCII from screenshots
-- Semantic: DOM-based structured ASCII with actionable elements
+- Visual: Pixel-based ASCII art from screenshots (true ASCII rendering)
+- Semantic: DOM-based structured text with actionable elements
+
+The visual mode captures a screenshot and converts it to ASCII art.
+The semantic mode extracts DOM structure for AI agents.
 """
 
-import re
+import io
 from typing import Optional, List, Dict, Any, Tuple, Union
 from dataclasses import dataclass, field
 from enum import Enum
+
+from PIL import Image
+import numpy as np
+
+from .converter import ASCIIConverter, CharacterSets
 
 
 class ElementType(Enum):
@@ -350,24 +352,87 @@ class SemanticRenderer:
         return text[:max_len - 3] + "..."
 
 
-class BrowserRenderer:
+class VisualRenderer:
     """
-    Main browser rendering class.
+    Renders web pages as true ASCII art from screenshots.
 
-    Connects to a browser via Playwright, extracts DOM structure,
-    and renders as semantic ASCII.
+    Takes a screenshot and converts it to ASCII using the ASCIIConverter.
     """
 
     def __init__(
         self,
-        width: int = 100,
+        width: int = 120,
+        charset: str = CharacterSets.BLOCKS,
+        color: bool = True,
+        invert: bool = False
+    ):
+        self.width = width
+        self.charset = charset
+        self.color = color
+        self.invert = invert
+        self.converter = ASCIIConverter(
+            width=width,
+            charset=charset,
+            color=color,
+            invert=invert
+        )
+
+    def render(self, screenshot: bytes, page_info: Optional[PageInfo] = None) -> str:
+        """Render screenshot as ASCII art."""
+        # Convert bytes to PIL Image
+        image = Image.open(io.BytesIO(screenshot))
+
+        # Convert to ASCII
+        ascii_art = self.converter.convert(image)
+
+        lines = []
+
+        # Add header if page info available
+        if page_info:
+            lines.append(f"╔{'═' * (self.width - 2)}╗")
+            title = (page_info.title or "Untitled")[:self.width - 4]
+            lines.append(f"║ {title.ljust(self.width - 4)} ║")
+            url = (page_info.url or "")[:self.width - 4]
+            lines.append(f"║ {url.ljust(self.width - 4)} ║")
+            lines.append(f"╚{'═' * (self.width - 2)}╝")
+            lines.append("")
+
+        lines.append(ascii_art)
+
+        return "\n".join(lines)
+
+
+class BrowserRenderer:
+    """
+    Main browser rendering class.
+
+    Connects to a browser via Playwright and renders pages as ASCII.
+    Supports both visual (screenshot) and semantic (DOM) modes.
+    """
+
+    def __init__(
+        self,
+        width: int = 120,
         headless: bool = True,
-        browser_type: str = "chromium"
+        browser_type: str = "chromium",
+        mode: str = "visual",
+        charset: str = CharacterSets.BLOCKS,
+        color: bool = True
     ):
         self.width = width
         self.headless = headless
         self.browser_type = browser_type
-        self.renderer = SemanticRenderer(width=width)
+        self.mode = mode
+        self.charset = charset
+        self.color = color
+
+        # Create renderers
+        self.semantic_renderer = SemanticRenderer(width=width)
+        self.visual_renderer = VisualRenderer(
+            width=width,
+            charset=charset,
+            color=color
+        )
 
     def _get_element_type(self, tag: str, attrs: Dict[str, str]) -> ElementType:
         """Determine element type from tag and attributes."""
@@ -597,8 +662,8 @@ class BrowserRenderer:
         root = convert_node(dom_data)
         return root, interactive_elements
 
-    async def render_url_async(self, url: str) -> str:
-        """Render a URL as semantic ASCII (async)."""
+    async def render_url_async(self, url: str, full_page: bool = False) -> str:
+        """Render a URL as ASCII (async)."""
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -621,24 +686,29 @@ class BrowserRenderer:
                 title = await page.title()
                 viewport = page.viewport_size
 
-                dom_tree, interactive_elements = await self._extract_dom_playwright(page)
-
                 page_info = PageInfo(
                     url=url,
                     title=title,
                     width=viewport["width"],
-                    height=viewport["height"],
-                    dom_tree=dom_tree,
-                    interactive_elements=interactive_elements
+                    height=viewport["height"]
                 )
 
-                return self.renderer.render(page_info)
+                if self.mode == "visual":
+                    # Take screenshot and convert to ASCII
+                    screenshot = await page.screenshot(full_page=full_page)
+                    return self.visual_renderer.render(screenshot, page_info)
+                else:
+                    # Extract DOM and render semantically
+                    dom_tree, interactive_elements = await self._extract_dom_playwright(page)
+                    page_info.dom_tree = dom_tree
+                    page_info.interactive_elements = interactive_elements
+                    return self.semantic_renderer.render(page_info)
 
             finally:
                 await browser.close()
 
-    def render_url(self, url: str) -> str:
-        """Render a URL as semantic ASCII (sync)."""
+    def render_url(self, url: str, full_page: bool = False) -> str:
+        """Render a URL as ASCII (sync)."""
         import asyncio
 
         try:
@@ -646,12 +716,12 @@ class BrowserRenderer:
             if loop.is_running():
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self.render_url_async(url))
+                    future = executor.submit(asyncio.run, self.render_url_async(url, full_page))
                     return future.result()
             else:
-                return loop.run_until_complete(self.render_url_async(url))
+                return loop.run_until_complete(self.render_url_async(url, full_page))
         except RuntimeError:
-            return asyncio.run(self.render_url_async(url))
+            return asyncio.run(self.render_url_async(url, full_page))
 
     def render_page_sync(self, page) -> str:
         """Render an existing Playwright sync page."""
@@ -816,11 +886,55 @@ class AgentBrowserContext:
         return "\n".join(lines)
 
 
-def render_url(url: str, width: int = 100) -> str:
-    """Render a URL as semantic ASCII."""
-    return BrowserRenderer(width=width).render_url(url)
+def render_url(
+    url: str,
+    width: int = 120,
+    mode: str = "visual",
+    color: bool = True,
+    charset: str = CharacterSets.BLOCKS
+) -> str:
+    """
+    Render a URL as ASCII.
+
+    Args:
+        url: URL to render
+        width: Output width in characters
+        mode: "visual" for screenshot ASCII, "semantic" for DOM extraction
+        color: Enable color output (visual mode)
+        charset: Character set for visual mode
+
+    Returns:
+        ASCII representation of the page
+    """
+    return BrowserRenderer(
+        width=width,
+        mode=mode,
+        color=color,
+        charset=charset
+    ).render_url(url)
+
+
+def render_url_visual(
+    url: str,
+    width: int = 120,
+    color: bool = True,
+    charset: str = CharacterSets.BLOCKS,
+    full_page: bool = False
+) -> str:
+    """Render a URL as visual ASCII art from screenshot."""
+    return BrowserRenderer(
+        width=width,
+        mode="visual",
+        color=color,
+        charset=charset
+    ).render_url(url, full_page=full_page)
+
+
+def render_url_semantic(url: str, width: int = 100) -> str:
+    """Render a URL as semantic ASCII with interactive elements."""
+    return BrowserRenderer(width=width, mode="semantic").render_url(url)
 
 
 def get_agent_context(url: str, task: Optional[str] = None, width: int = 100) -> str:
-    """Get browser context for an AI agent."""
+    """Get browser context for an AI agent (semantic mode)."""
     return AgentBrowserContext(width=width).get_page_context(url=url, task=task)
