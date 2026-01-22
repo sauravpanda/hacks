@@ -3,11 +3,14 @@ Terminal display module for rendering ASCII art.
 
 Handles terminal output, screen clearing, cursor positioning,
 and real-time updates for live streaming.
+
+Supports dynamic terminal resize detection.
 """
 
 import sys
 import os
 import time
+import signal
 from typing import Optional, Callable, Tuple
 from contextlib import contextmanager
 
@@ -176,6 +179,90 @@ class Display:
         """Check if terminal supports 24-bit true color."""
         colorterm = os.environ.get("COLORTERM", "")
         return colorterm in ("truecolor", "24bit")
+
+
+class AdaptiveDisplay(Display):
+    """
+    Display that adapts to terminal size changes.
+
+    Automatically detects terminal resize events and notifies
+    callbacks so the output can be re-rendered at the new size.
+    """
+
+    def __init__(
+        self,
+        target_fps: int = 30,
+        show_stats: bool = True,
+        output_stream=None,
+        margin: int = 2,
+        on_resize: Optional[Callable[[int, int], None]] = None
+    ):
+        """
+        Initialize adaptive display.
+
+        Args:
+            target_fps: Target frames per second
+            show_stats: Show FPS stats
+            output_stream: Output stream
+            margin: Margin to leave at edges (for stats line, etc.)
+            on_resize: Callback(width, height) when terminal is resized
+        """
+        super().__init__(target_fps, show_stats, output_stream)
+        self.margin = margin
+        self._on_resize = on_resize
+        self._last_size: Optional[Tuple[int, int]] = None
+        self._resize_pending = False
+
+        # Set up signal handler for terminal resize (Unix only)
+        try:
+            signal.signal(signal.SIGWINCH, self._handle_resize)
+        except (AttributeError, ValueError):
+            # SIGWINCH not available on Windows, or can't set in this context
+            pass
+
+    def _handle_resize(self, signum, frame):
+        """Handle terminal resize signal."""
+        self._resize_pending = True
+
+    def check_resize(self) -> Optional[Tuple[int, int]]:
+        """
+        Check for terminal size changes.
+
+        Returns new (width, height) if changed, None otherwise.
+        """
+        current_size = self.get_terminal_size()
+
+        if self._last_size != current_size or self._resize_pending:
+            self._last_size = current_size
+            self._resize_pending = False
+
+            width = max(20, current_size[0] - self.margin)
+            height = max(10, current_size[1] - self.margin)
+
+            if self._on_resize:
+                self._on_resize(width, height)
+
+            return (width, height)
+
+        return None
+
+    def get_adaptive_width(self) -> int:
+        """Get current adaptive width based on terminal size."""
+        cols, _ = self.get_terminal_size()
+        return max(20, cols - self.margin)
+
+    def get_adaptive_size(self) -> Tuple[int, int]:
+        """Get current adaptive size (width, height) based on terminal."""
+        cols, rows = self.get_terminal_size()
+        width = max(20, cols - self.margin)
+        height = max(10, rows - self.margin)
+        return (width, height)
+
+    def render_frame(self, content: str):
+        """Render frame and check for resize."""
+        # Check for resize on each frame
+        self.check_resize()
+        super().render_frame(content)
 
 
 class DoubleBuffer:

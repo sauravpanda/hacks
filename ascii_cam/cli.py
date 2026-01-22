@@ -49,6 +49,7 @@ Keyboard Controls:
   b           Toggle braille mode
   i           Toggle invert
   r           Toggle recording
+  a           Toggle auto-resize (follow terminal size)
   + / -       Adjust width
   [ / ]       Adjust brightness
   { / }       Adjust contrast
@@ -141,6 +142,8 @@ class ASCIICamApp:
         self._running = False
         self._paused = False
         self._show_help = False
+        self._auto_resize = True  # Auto-adapt to terminal size
+        self._last_terminal_size = Display.get_terminal_size()
 
     def _setup_signal_handlers(self):
         """Set up signal handlers for graceful shutdown."""
@@ -214,6 +217,20 @@ class ASCIICamApp:
         print("\nCamera stream ended.")
         return 0
 
+    def _check_terminal_resize(self):
+        """Check if terminal was resized and update width if auto-resize enabled."""
+        if not self._auto_resize:
+            return
+
+        current_size = Display.get_terminal_size()
+        if current_size != self._last_terminal_size:
+            self._last_terminal_size = current_size
+            new_width = max(20, current_size[0] - 2)
+            if new_width != self.width:
+                self.width = new_width
+                self.converter.width = new_width
+                self.display.clear()  # Clear to prevent artifacts
+
     def _camera_loop(self, camera: Camera, term):
         """Main camera loop with keyboard input."""
         while self._running:
@@ -226,6 +243,9 @@ class ASCIICamApp:
             if self._show_help:
                 self._display_help()
                 continue
+
+            # Check for terminal resize
+            self._check_terminal_resize()
 
             if not self._paused:
                 frame = camera.read()
@@ -247,6 +267,9 @@ class ASCIICamApp:
     def _camera_loop_simple(self, camera: Camera):
         """Simple camera loop without keyboard input."""
         while self._running:
+            # Check for terminal resize
+            self._check_terminal_resize()
+
             frame = camera.read()
             if frame is None:
                 break
@@ -298,6 +321,11 @@ class ASCIICamApp:
             self.converter.charset = charset
         elif key_char == 's':
             self._save_screenshot()
+        elif key_char == 'a':
+            self._auto_resize = not self._auto_resize
+            if self._auto_resize:
+                # Immediately resize to current terminal size
+                self._check_terminal_resize()
         elif key_char in ('h', '?'):
             self._show_help = not self._show_help
         elif key_char == ' ':
@@ -338,6 +366,8 @@ class ASCIICamApp:
             f"C:{self.contrast:.1f}",
         ]
 
+        if self._auto_resize:
+            parts.append("AUTO")
         if self.color:
             parts.append("COLOR")
         if self.edge_mode:
