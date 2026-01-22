@@ -478,7 +478,11 @@ def cmd_video(args):
         args.video,
         width=args.width,
         color=args.color,
-        charset=args.charset
+        charset=args.charset,
+        contrast=getattr(args, 'contrast', 1.0),
+        brightness=getattr(args, 'brightness', 1.0),
+        edge_enhance=getattr(args, 'edge', False),
+        preset=getattr(args, 'preset', None)
     )
     player.play()
     return 0
@@ -879,6 +883,11 @@ def main():
     vid_parser.add_argument("-w", "--width", type=int, help="Output width")
     vid_parser.add_argument("-c", "--color", action="store_true", help="Enable color")
     vid_parser.add_argument("-s", "--charset", default="standard", help="Character set")
+    vid_parser.add_argument("--contrast", type=float, default=1.0, help="Contrast boost (1.5-2.0 for movement)")
+    vid_parser.add_argument("--brightness", type=float, default=1.0, help="Brightness adjustment")
+    vid_parser.add_argument("--edge", action="store_true", help="Add edge enhancement for clearer shapes")
+    vid_parser.add_argument("--preset", choices=["high_contrast", "movement", "dark", "bright"],
+                           help="Enhancement preset (movement recommended for dance/sports)")
     vid_parser.set_defaults(func=cmd_video)
 
     # Audio command

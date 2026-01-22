@@ -220,15 +220,27 @@ class ASCIIVideoPlayer:
     Features:
     - Real-time playback with frame rate control
     - Pause, seek, and speed controls
+    - Enhancement options for better visibility
     - Optional audio playback
     """
+
+    # Enhancement presets
+    PRESET_DEFAULT = {"contrast": 1.0, "brightness": 1.0, "edge": False}
+    PRESET_HIGH_CONTRAST = {"contrast": 1.8, "brightness": 1.1, "edge": False}
+    PRESET_MOVEMENT = {"contrast": 2.0, "brightness": 1.0, "edge": True}
+    PRESET_DARK = {"contrast": 1.5, "brightness": 1.4, "edge": False}
+    PRESET_BRIGHT = {"contrast": 1.3, "brightness": 0.9, "edge": False}
 
     def __init__(
         self,
         video_path: str,
         width: Optional[int] = None,
         color: bool = True,
-        charset: str = "standard"
+        charset: str = "standard",
+        contrast: float = 1.0,
+        brightness: float = 1.0,
+        edge_enhance: bool = False,
+        preset: Optional[str] = None
     ):
         """
         Initialize video player.
@@ -238,9 +250,29 @@ class ASCIIVideoPlayer:
             width: ASCII output width (auto-detect if None)
             color: Enable color output
             charset: Character set to use
+            contrast: Contrast multiplier (1.5-2.0 for movement)
+            brightness: Brightness multiplier
+            edge_enhance: Add edge detection for clearer shapes
+            preset: Enhancement preset ('high_contrast', 'movement', 'dark', 'bright')
         """
         self.video_path = video_path
         self.reader = VideoReader(video_path)
+
+        # Apply preset if specified
+        if preset:
+            presets = {
+                "high_contrast": self.PRESET_HIGH_CONTRAST,
+                "movement": self.PRESET_MOVEMENT,
+                "dark": self.PRESET_DARK,
+                "bright": self.PRESET_BRIGHT,
+            }
+            if preset in presets:
+                p = presets[preset]
+                contrast = p["contrast"]
+                brightness = p["brightness"]
+                edge_enhance = p["edge"]
+
+        self.edge_enhance = edge_enhance
 
         # Auto-detect width
         if width is None:
@@ -249,7 +281,10 @@ class ASCIIVideoPlayer:
 
         # Set up converter
         if charset == "braille":
-            self.converter = ASCIIConverter(width=width, color=color, charset="braille")
+            self.converter = ASCIIConverter(
+                width=width, color=color, charset="braille",
+                contrast=contrast, brightness=brightness
+            )
         else:
             charset_map = {
                 "standard": CharacterSets.STANDARD,
@@ -260,7 +295,9 @@ class ASCIIVideoPlayer:
             self.converter = ASCIIConverter(
                 width=width,
                 color=color,
-                charset=charset_map.get(charset, CharacterSets.STANDARD)
+                charset=charset_map.get(charset, CharacterSets.STANDARD),
+                contrast=contrast,
+                brightness=brightness
             )
 
         self.display = Display()
@@ -319,6 +356,27 @@ class ASCIIVideoPlayer:
                 self.converter.width = new_width
                 self.display.clear()
 
+    def _apply_edge_enhance(self, image: Image.Image) -> Image.Image:
+        """Apply edge enhancement to make shapes more visible."""
+        from PIL import ImageFilter, ImageEnhance
+
+        # Convert to grayscale for edge detection
+        gray = image.convert("L")
+
+        # Find edges
+        edges = gray.filter(ImageFilter.FIND_EDGES)
+
+        # Enhance edges
+        edges = ImageEnhance.Contrast(edges).enhance(2.0)
+
+        # Blend original grayscale with edges (70% original, 30% edges)
+        blended = Image.blend(gray, edges, alpha=0.3)
+
+        # Increase sharpness
+        blended = blended.filter(ImageFilter.SHARPEN)
+
+        return blended.convert("RGB")  # Convert back to RGB for color converter
+
     def _playback_loop(self, term):
         """Main playback loop with keyboard controls."""
         info = self.reader.info
@@ -345,6 +403,11 @@ class ASCIIVideoPlayer:
                 # Convert to ASCII
                 rgb_frame = frame.image[:, :, ::-1]  # BGR to RGB
                 image = Image.fromarray(rgb_frame)
+
+                # Apply edge enhancement if enabled
+                if self.edge_enhance:
+                    image = self._apply_edge_enhance(image)
+
                 ascii_art = self.converter.convert(image)
 
                 # Add status bar
@@ -379,6 +442,11 @@ class ASCIIVideoPlayer:
 
             rgb_frame = frame.image[:, :, ::-1]
             image = Image.fromarray(rgb_frame)
+
+            # Apply edge enhancement if enabled
+            if self.edge_enhance:
+                image = self._apply_edge_enhance(image)
+
             ascii_art = self.converter.convert(image)
 
             progress = frame.timestamp / info.duration
