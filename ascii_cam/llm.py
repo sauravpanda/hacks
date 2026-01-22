@@ -119,24 +119,32 @@ class LLMContextBuilder:
     def video_to_context(
         self,
         video_path: str,
-        sample_interval: float = 2.0,
+        sample_interval: Optional[float] = None,
         max_frames: int = 10,
         start_time: float = 0.0,
-        end_time: Optional[float] = None
+        end_time: Optional[float] = None,
+        fps: Optional[float] = None
     ) -> VideoContext:
         """
         Convert video to LLM context.
 
         Args:
             video_path: Path to video file
-            sample_interval: Seconds between sampled frames
+            sample_interval: Seconds between sampled frames (default: 2.0)
             max_frames: Maximum frames to include
             start_time: Start time in seconds
             end_time: End time in seconds (None for full video)
+            fps: Alternative to sample_interval - frames per second to sample.
+                 If provided, overrides sample_interval. E.g., fps=0.5 = 1 frame every 2 seconds
 
         Returns:
             VideoContext object
         """
+        # Handle fps vs sample_interval
+        if fps is not None:
+            sample_interval = 1.0 / fps
+        elif sample_interval is None:
+            sample_interval = 2.0
         frames = []
 
         with VideoReader(video_path) as reader:
@@ -470,7 +478,8 @@ def video_to_llm_prompt(
     task: str = "describe",
     width: int = 60,
     max_frames: int = 5,
-    sample_interval: float = 2.0
+    sample_interval: Optional[float] = None,
+    fps: Optional[float] = None
 ) -> str:
     """
     Convenience function to convert video to LLM prompt.
@@ -480,7 +489,9 @@ def video_to_llm_prompt(
         task: Analysis task
         width: ASCII width
         max_frames: Maximum frames to include
-        sample_interval: Seconds between frames
+        sample_interval: Seconds between frames (default: 2.0)
+        fps: Alternative to sample_interval - frames per second to sample.
+             E.g., fps=0.5 = 1 frame every 2 seconds, fps=2 = 2 frames per second
 
     Returns:
         Ready-to-use LLM prompt
@@ -489,7 +500,8 @@ def video_to_llm_prompt(
     context = builder.video_to_context(
         video_path,
         sample_interval=sample_interval,
-        max_frames=max_frames
+        max_frames=max_frames,
+        fps=fps
     )
     return builder.format_for_prompt(context, task=task)
 

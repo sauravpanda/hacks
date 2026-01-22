@@ -613,7 +613,8 @@ def cmd_llm(args):
             task=args.task,
             width=args.width,
             max_frames=args.frames,
-            sample_interval=args.interval
+            sample_interval=getattr(args, 'interval', None),
+            fps=getattr(args, 'fps', None)
         )
     else:
         # Image file
@@ -790,7 +791,8 @@ def main():
     llm_parser.add_argument("-w", "--width", type=int, default=60, help="ASCII width (smaller = fewer tokens)")
     llm_parser.add_argument("-t", "--task", default="describe", help="Analysis task (describe, analyze, summarize)")
     llm_parser.add_argument("-n", "--frames", type=int, default=5, help="Max frames for video")
-    llm_parser.add_argument("--interval", type=float, default=2.0, help="Seconds between frames")
+    llm_parser.add_argument("--interval", type=float, help="Seconds between frames (default: 2.0)")
+    llm_parser.add_argument("--fps", type=float, help="Frames per second to sample (alternative to --interval)")
     llm_parser.set_defaults(func=cmd_llm)
 
     # Browse command
