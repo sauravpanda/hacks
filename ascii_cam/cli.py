@@ -670,11 +670,21 @@ def cmd_llm(args):
 
     input_path = args.input
     view_mode = getattr(args, 'view', False)
+    contrast = getattr(args, 'contrast', 1.0)
+    brightness = getattr(args, 'brightness', 1.0)
+    edge_enhance = getattr(args, 'edge', False)
+    preset = getattr(args, 'preset', None)
 
     if input_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
         if view_mode:
             # Interactive frame viewer mode
-            builder = LLMContextBuilder(width=args.width)
+            builder = LLMContextBuilder(
+                width=args.width,
+                contrast=contrast,
+                brightness=brightness,
+                edge_enhance=edge_enhance,
+                preset=preset
+            )
             context = builder.video_to_context(
                 input_path,
                 sample_interval=getattr(args, 'interval', None),
@@ -691,24 +701,53 @@ def cmd_llm(args):
             width=args.width,
             max_frames=args.frames,
             sample_interval=getattr(args, 'interval', None),
-            fps=getattr(args, 'fps', None)
+            fps=getattr(args, 'fps', None),
+            contrast=contrast,
+            brightness=brightness,
+            edge_enhance=edge_enhance,
+            preset=preset
         )
     else:
         if view_mode:
             # For images, just show the single frame
             from PIL import Image as PILImage
-            builder = LLMContextBuilder(width=args.width)
+            builder = LLMContextBuilder(
+                width=args.width,
+                contrast=contrast,
+                brightness=brightness,
+                edge_enhance=edge_enhance,
+                preset=preset
+            )
             image = PILImage.open(input_path)
             frame_ctx = builder.frame_to_context(image)
             print(frame_ctx.ascii_art)
             return 0
 
-        # Image file
-        prompt = image_to_llm_context(
-            input_path,
+        # Image file - also apply enhancement
+        from PIL import Image as PILImage
+        builder = LLMContextBuilder(
             width=args.width,
-            task=args.task
+            contrast=contrast,
+            brightness=brightness,
+            edge_enhance=edge_enhance,
+            preset=preset
         )
+        image = PILImage.open(input_path)
+        frame_ctx = builder.frame_to_context(image)
+
+        # Format as prompt
+        prompt = f"""# Image Analysis Task: {args.task.title()}
+
+## ASCII Representation
+Characters represent brightness: space (dark) to # (bright).
+
+```
+{frame_ctx.ascii_art}
+```
+
+## Task
+{args.task.capitalize()} what you see in this ASCII image representation.
+"""
 
     if args.output:
         with open(args.output, 'w') as f:
@@ -878,6 +917,11 @@ def main():
     llm_parser.add_argument("-n", "--frames", type=int, default=5, help="Max frames for video")
     llm_parser.add_argument("--interval", type=float, help="Seconds between frames (default: 2.0)")
     llm_parser.add_argument("--fps", type=float, help="Frames per second to sample (alternative to --interval)")
+    llm_parser.add_argument("--contrast", type=float, default=1.0, help="Contrast boost (1.5-2.0 for movement)")
+    llm_parser.add_argument("--brightness", type=float, default=1.0, help="Brightness adjustment")
+    llm_parser.add_argument("--edge", action="store_true", help="Add edge enhancement for clearer shapes")
+    llm_parser.add_argument("--preset", choices=["high_contrast", "movement", "dark", "bright"],
+                           help="Enhancement preset (movement recommended for dance/sports)")
     llm_parser.add_argument("--view", action="store_true", help="Interactive viewer: show one frame at a time")
     llm_parser.set_defaults(func=cmd_llm)
 

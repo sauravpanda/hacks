@@ -59,11 +59,22 @@ class LLMContextBuilder:
     WIDTH_STANDARD = 80  # ~6.4K chars per frame, detailed
     WIDTH_DETAILED = 120 # ~14K chars per frame, high detail
 
+    # Enhancement presets for different content types
+    PRESET_DEFAULT = {"contrast": 1.0, "brightness": 1.0, "edge": False}
+    PRESET_HIGH_CONTRAST = {"contrast": 1.8, "brightness": 1.1, "edge": False}
+    PRESET_MOVEMENT = {"contrast": 2.0, "brightness": 1.0, "edge": True}  # Good for dance, sports
+    PRESET_DARK_VIDEO = {"contrast": 1.5, "brightness": 1.4, "edge": False}
+    PRESET_BRIGHT_VIDEO = {"contrast": 1.3, "brightness": 0.9, "edge": False}
+
     def __init__(
         self,
         width: int = 60,
         charset: str = "minimal",
-        include_metadata: bool = True
+        include_metadata: bool = True,
+        contrast: float = 1.0,
+        brightness: float = 1.0,
+        edge_enhance: bool = False,
+        preset: Optional[str] = None
     ):
         """
         Initialize context builder.
@@ -72,20 +83,42 @@ class LLMContextBuilder:
             width: ASCII width (smaller = fewer tokens)
             charset: Character set ('minimal' recommended for LLM)
             include_metadata: Include frame metadata
+            contrast: Contrast multiplier (1.5-2.0 recommended for movement)
+            brightness: Brightness multiplier
+            edge_enhance: Add edge detection for clearer shapes
+            preset: Use a preset ('high_contrast', 'movement', 'dark', 'bright')
         """
         self.width = width
         self.include_metadata = include_metadata
+        self.edge_enhance = edge_enhance
+
+        # Apply preset if specified
+        if preset:
+            presets = {
+                "high_contrast": self.PRESET_HIGH_CONTRAST,
+                "movement": self.PRESET_MOVEMENT,
+                "dark": self.PRESET_DARK_VIDEO,
+                "bright": self.PRESET_BRIGHT_VIDEO,
+            }
+            if preset in presets:
+                p = presets[preset]
+                contrast = p["contrast"]
+                brightness = p["brightness"]
+                self.edge_enhance = p["edge"]
 
         # Use minimal charset for best token efficiency
         charset_map = {
             "minimal": CharacterSets.MINIMAL,
             "standard": CharacterSets.STANDARD,
+            "detailed": CharacterSets.DETAILED,
             "blocks": CharacterSets.BLOCKS,
         }
         self.converter = ASCIIConverter(
             width=width,
             color=False,  # No colors for LLM
-            charset=charset_map.get(charset, CharacterSets.MINIMAL)
+            charset=charset_map.get(charset, CharacterSets.MINIMAL),
+            contrast=contrast,
+            brightness=brightness
         )
 
     def frame_to_context(
@@ -105,6 +138,10 @@ class LLMContextBuilder:
         Returns:
             FrameContext object
         """
+        # Apply edge enhancement if enabled
+        if self.edge_enhance:
+            image = self._apply_edge_enhance(image)
+
         ascii_art = self.converter.convert(image)
         lines = ascii_art.split('\n')
 
@@ -115,6 +152,32 @@ class LLMContextBuilder:
             width=self.width,
             height=len(lines)
         )
+
+    def _apply_edge_enhance(self, image: Image.Image) -> Image.Image:
+        """
+        Apply edge enhancement to make shapes more visible.
+
+        Combines the original image with edge-detected version
+        to preserve details while highlighting contours.
+        """
+        from PIL import ImageFilter, ImageEnhance
+
+        # Convert to grayscale for edge detection
+        gray = image.convert("L")
+
+        # Find edges
+        edges = gray.filter(ImageFilter.FIND_EDGES)
+
+        # Enhance edges
+        edges = ImageEnhance.Contrast(edges).enhance(2.0)
+
+        # Blend original grayscale with edges (70% original, 30% edges)
+        blended = Image.blend(gray, edges, alpha=0.3)
+
+        # Increase sharpness
+        blended = blended.filter(ImageFilter.SHARPEN)
+
+        return blended
 
     def video_to_context(
         self,
@@ -479,7 +542,11 @@ def video_to_llm_prompt(
     width: int = 60,
     max_frames: int = 5,
     sample_interval: Optional[float] = None,
-    fps: Optional[float] = None
+    fps: Optional[float] = None,
+    contrast: float = 1.0,
+    brightness: float = 1.0,
+    edge_enhance: bool = False,
+    preset: Optional[str] = None
 ) -> str:
     """
     Convenience function to convert video to LLM prompt.
@@ -492,11 +559,21 @@ def video_to_llm_prompt(
         sample_interval: Seconds between frames (default: 2.0)
         fps: Alternative to sample_interval - frames per second to sample.
              E.g., fps=0.5 = 1 frame every 2 seconds, fps=2 = 2 frames per second
+        contrast: Contrast multiplier (1.5-2.0 for better visibility)
+        brightness: Brightness multiplier
+        edge_enhance: Add edge detection for clearer shapes
+        preset: Use a preset ('high_contrast', 'movement', 'dark', 'bright')
 
     Returns:
         Ready-to-use LLM prompt
     """
-    builder = LLMContextBuilder(width=width)
+    builder = LLMContextBuilder(
+        width=width,
+        contrast=contrast,
+        brightness=brightness,
+        edge_enhance=edge_enhance,
+        preset=preset
+    )
     context = builder.video_to_context(
         video_path,
         sample_interval=sample_interval,
