@@ -600,28 +600,154 @@ def cmd_record(args):
     return 0
 
 
+def _view_frames_interactive(frames, video_path):
+    """Interactive frame viewer - show one frame at a time."""
+    from .display import Display
+
+    display = Display(show_stats=False)
+
+    try:
+        from blessed import Terminal
+        term = Terminal()
+    except ImportError:
+        # Fallback: just print frames sequentially
+        for i, frame in enumerate(frames):
+            timestamp = f"{int(frame.timestamp // 60):02d}:{frame.timestamp % 60:05.2f}"
+            print(f"\n=== Frame {i + 1}/{len(frames)} (t={timestamp}) ===\n")
+            print(frame.ascii_art)
+            if i < len(frames) - 1:
+                input("\nPress Enter for next frame...")
+        return
+
+    current_idx = 0
+    running = True
+
+    with term.cbreak(), term.hidden_cursor():
+        while running:
+            frame = frames[current_idx]
+            timestamp = f"{int(frame.timestamp // 60):02d}:{frame.timestamp % 60:05.2f}"
+
+            # Build display
+            display.clear()
+
+            # Header
+            header = f"Frame {current_idx + 1}/{len(frames)} | t={timestamp} | {video_path}"
+            print(f"\033[1m{header}\033[0m")
+            print("─" * len(header))
+            print()
+
+            # Frame content
+            print(frame.ascii_art)
+
+            # Footer with controls
+            print()
+            print("\033[90m[←/→] prev/next  [j/k] prev/next  [q] quit  [1-9] jump to frame\033[0m")
+
+            # Handle input
+            key = term.inkey(timeout=None)
+            key_str = str(key).lower() if hasattr(key, 'lower') else str(key)
+
+            if key_str in ('q', '\x1b'):
+                running = False
+            elif key.name == 'KEY_RIGHT' or key_str in ('l', 'j', ' '):
+                current_idx = min(current_idx + 1, len(frames) - 1)
+            elif key.name == 'KEY_LEFT' or key_str in ('h', 'k'):
+                current_idx = max(current_idx - 1, 0)
+            elif key.name == 'KEY_HOME' or key_str == '0':
+                current_idx = 0
+            elif key.name == 'KEY_END' or key_str == '$':
+                current_idx = len(frames) - 1
+            elif key_str.isdigit() and key_str != '0':
+                # Jump to frame (1-indexed)
+                target = int(key_str) - 1
+                if 0 <= target < len(frames):
+                    current_idx = target
+
+
 def cmd_llm(args):
     """Handle LLM context generation command."""
-    from .llm import video_to_llm_prompt, image_to_llm_context
+    from .llm import video_to_llm_prompt, image_to_llm_context, LLMContextBuilder
 
     input_path = args.input
+    view_mode = getattr(args, 'view', False)
+    contrast = getattr(args, 'contrast', 1.0)
+    brightness = getattr(args, 'brightness', 1.0)
+    edge_enhance = getattr(args, 'edge', False)
+    preset = getattr(args, 'preset', None)
 
     if input_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
-        # Video file
+        if view_mode:
+            # Interactive frame viewer mode
+            builder = LLMContextBuilder(
+                width=args.width,
+                contrast=contrast,
+                brightness=brightness,
+                edge_enhance=edge_enhance,
+                preset=preset
+            )
+            context = builder.video_to_context(
+                input_path,
+                sample_interval=getattr(args, 'interval', None),
+                max_frames=args.frames,
+                fps=getattr(args, 'fps', None)
+            )
+            _view_frames_interactive(context.sampled_frames, input_path)
+            return 0
+
+        # Video file - generate prompt
         prompt = video_to_llm_prompt(
             input_path,
             task=args.task,
             width=args.width,
             max_frames=args.frames,
-            sample_interval=args.interval
+            sample_interval=getattr(args, 'interval', None),
+            fps=getattr(args, 'fps', None),
+            contrast=contrast,
+            brightness=brightness,
+            edge_enhance=edge_enhance,
+            preset=preset
         )
     else:
-        # Image file
-        prompt = image_to_llm_context(
-            input_path,
+        if view_mode:
+            # For images, just show the single frame
+            from PIL import Image as PILImage
+            builder = LLMContextBuilder(
+                width=args.width,
+                contrast=contrast,
+                brightness=brightness,
+                edge_enhance=edge_enhance,
+                preset=preset
+            )
+            image = PILImage.open(input_path)
+            frame_ctx = builder.frame_to_context(image)
+            print(frame_ctx.ascii_art)
+            return 0
+
+        # Image file - also apply enhancement
+        from PIL import Image as PILImage
+        builder = LLMContextBuilder(
             width=args.width,
-            task=args.task
+            contrast=contrast,
+            brightness=brightness,
+            edge_enhance=edge_enhance,
+            preset=preset
         )
+        image = PILImage.open(input_path)
+        frame_ctx = builder.frame_to_context(image)
+
+        # Format as prompt
+        prompt = f"""# Image Analysis Task: {args.task.title()}
+
+## ASCII Representation
+Characters represent brightness: space (dark) to # (bright).
+
+```
+{frame_ctx.ascii_art}
+```
+
+## Task
+{args.task.capitalize()} what you see in this ASCII image representation.
+"""
 
     if args.output:
         with open(args.output, 'w') as f:
@@ -629,7 +755,6 @@ def cmd_llm(args):
         print(f"Saved LLM context to: {args.output}")
 
         # Show stats
-        from .llm import LLMContextBuilder
         tokens = len(prompt) // 4
         print(f"Estimated tokens: ~{tokens:,}")
     else:
@@ -790,18 +915,25 @@ def main():
     llm_parser.add_argument("-w", "--width", type=int, default=60, help="ASCII width (smaller = fewer tokens)")
     llm_parser.add_argument("-t", "--task", default="describe", help="Analysis task (describe, analyze, summarize)")
     llm_parser.add_argument("-n", "--frames", type=int, default=5, help="Max frames for video")
-    llm_parser.add_argument("--interval", type=float, default=2.0, help="Seconds between frames")
+    llm_parser.add_argument("--interval", type=float, help="Seconds between frames (default: 2.0)")
+    llm_parser.add_argument("--fps", type=float, help="Frames per second to sample (alternative to --interval)")
+    llm_parser.add_argument("--contrast", type=float, default=1.0, help="Contrast boost (1.5-2.0 for movement)")
+    llm_parser.add_argument("--brightness", type=float, default=1.0, help="Brightness adjustment")
+    llm_parser.add_argument("--edge", action="store_true", help="Add edge enhancement for clearer shapes")
+    llm_parser.add_argument("--preset", choices=["high_contrast", "movement", "dark", "bright"],
+                           help="Enhancement preset (movement recommended for dance/sports)")
+    llm_parser.add_argument("--view", action="store_true", help="Interactive viewer: show one frame at a time")
     llm_parser.set_defaults(func=cmd_llm)
 
     # Browse command
     browse_parser = subparsers.add_parser("browse", aliases=["web"], help="Render website as ASCII art")
     browse_parser.add_argument("url", help="URL to render")
     browse_parser.add_argument("-o", "--output", help="Output file (prints to stdout if not specified)")
-    browse_parser.add_argument("-w", "--width", type=int, default=120, help="ASCII width (default: 120)")
+    browse_parser.add_argument("-w", "--width", type=int, default=160, help="ASCII width (default: 160)")
     browse_parser.add_argument("-m", "--mode", choices=["visual", "semantic"], default="visual",
                               help="Rendering mode: visual (screenshot ASCII) or semantic (DOM text)")
     browse_parser.add_argument("-c", "--charset", choices=["standard", "detailed", "blocks", "braille", "minimal"],
-                              default="blocks", help="Character set for visual mode (default: blocks)")
+                              default="detailed", help="Character set for visual mode (default: detailed)")
     browse_parser.add_argument("--no-color", action="store_true", help="Disable color output")
     browse_parser.add_argument("--full-page", action="store_true", help="Capture full scrollable page")
     browse_parser.add_argument("-t", "--task", help="Task description for agent context")

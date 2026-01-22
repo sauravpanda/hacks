@@ -361,8 +361,8 @@ class VisualRenderer:
 
     def __init__(
         self,
-        width: int = 120,
-        charset: str = CharacterSets.BLOCKS,
+        width: int = 160,
+        charset: str = CharacterSets.DETAILED,
         color: bool = True,
         invert: bool = False
     ):
@@ -374,7 +374,8 @@ class VisualRenderer:
             width=width,
             charset=charset,
             color=color,
-            invert=invert
+            invert=invert,
+            contrast=1.2  # Slightly boost contrast for better web readability
         )
 
     def render(self, screenshot: bytes, page_info: Optional[PageInfo] = None) -> str:
@@ -412,11 +413,11 @@ class BrowserRenderer:
 
     def __init__(
         self,
-        width: int = 120,
+        width: int = 160,
         headless: bool = True,
         browser_type: str = "chromium",
         mode: str = "visual",
-        charset: str = CharacterSets.BLOCKS,
+        charset: str = CharacterSets.DETAILED,
         color: bool = True
     ):
         self.width = width
@@ -677,7 +678,9 @@ class BrowserRenderer:
 
             try:
                 page = await browser.new_page()
-                await page.set_viewport_size({"width": 1280, "height": 800})
+                # Use high resolution for better ASCII detail
+                # Scale factor 2x gives us more pixels to work with
+                await page.set_viewport_size({"width": 1920, "height": 1080})
                 await page.goto(url, wait_until="networkidle", timeout=30000)
 
                 # Wait a bit for dynamic content
@@ -888,10 +891,10 @@ class AgentBrowserContext:
 
 def render_url(
     url: str,
-    width: int = 120,
+    width: int = 160,
     mode: str = "visual",
     color: bool = True,
-    charset: str = CharacterSets.BLOCKS
+    charset: str = CharacterSets.DETAILED
 ) -> str:
     """
     Render a URL as ASCII.
@@ -916,9 +919,9 @@ def render_url(
 
 def render_url_visual(
     url: str,
-    width: int = 120,
+    width: int = 160,
     color: bool = True,
-    charset: str = CharacterSets.BLOCKS,
+    charset: str = CharacterSets.DETAILED,
     full_page: bool = False
 ) -> str:
     """Render a URL as visual ASCII art from screenshot."""
