@@ -41,7 +41,7 @@ A terminal application that converts images, video, and live camera feeds to ASC
 - **Edge Detection** - Canny/Sobel edge detection for line-art style
 - **Multiple Character Sets** - Standard, detailed, blocks, minimal, and braille
 - **LLM Context Generation** - Convert video/images to token-efficient ASCII for AI analysis
-- **Browser Capture** - Screenshot web pages as ASCII for AI agents
+- **Semantic Browser Rendering** - Render web pages as structured ASCII with interactive elements for AI agents
 
 ## Installation
 
@@ -79,6 +79,9 @@ ascii-cam record -d 5 -o my_recording.gif
 
 # Generate LLM context from video
 ascii-cam llm video.mp4 -t describe -o context.txt
+
+# Render website as semantic ASCII
+ascii-cam browse https://example.com --agent
 ```
 
 ## Commands
@@ -137,6 +140,29 @@ ascii-cam llm screenshot.png -t analyze
 ascii-cam llm video.mp4 -o context.txt -w 60 -n 10
 ```
 
+### `browse` - Semantic Web Rendering
+```bash
+# Render a website as semantic ASCII
+ascii-cam browse https://example.com
+
+# With agent context (includes action suggestions)
+ascii-cam browse https://example.com --agent
+
+# With a task description
+ascii-cam browse https://example.com --agent -t "Find the login button"
+
+# Save to file
+ascii-cam browse https://example.com -o page.txt
+
+# Use different browser
+ascii-cam browse https://example.com --browser firefox
+```
+
+Output includes:
+- Page structure with semantic elements (header, nav, main, footer)
+- Interactive elements with CSS selectors
+- Suggested actions for AI agents
+
 ## LLM Integration
 
 ASCII frames are ~100x more token-efficient than base64 images. Use this to give vision-like capabilities to text-only models, or reduce costs with vision models.
@@ -162,9 +188,64 @@ response = client.messages.create(
 )
 ```
 
-### Browser Capture for AI Agents
+### Semantic Browser for AI Agents
 
-Perfect for browser automation agents like browser-use:
+Render web pages as structured ASCII with interactive elements - perfect for browser automation agents:
+
+```python
+from ascii_cam import semantic_browser_context
+
+# Get semantic ASCII representation of a webpage
+context = semantic_browser_context(
+    url="https://example.com",
+    task="Find and click the login button"
+)
+
+# Context includes:
+# - Page structure (header, nav, main, forms, etc.)
+# - Interactive elements with CSS selectors
+# - Suggested actions for the agent
+
+response = llm.complete(context)
+```
+
+Example output:
+```
+╔════════════════════════════════════════════════════════════╗
+║ Example Domain                                              ║
+║ https://example.com                                         ║
+╚════════════════════════════════════════════════════════════╝
+
+## Page Structure
+
+├─ ┌─ HEADER ─┐
+│  ├─ → Home  #nav-home
+│  ├─ → Products  #nav-products
+│  ├─ [ Login ]  #login-btn
+├─ ┌─ MAIN ─┐
+│  ├─ # Welcome to Example
+│  ├─ [text: Enter email]  #email-input
+│  ├─ [password: ___]  #password-input
+│  ├─ [ Submit ]  #submit-btn
+
+## Interactive Elements
+
+### BUTTONS
+  1. [btn] Login                 #login-btn
+  2. [btn] Submit                #submit-btn
+
+### LINKS
+  3. [→] Home                    #nav-home
+  4. [→] Products                #nav-products
+
+### INPUTS
+  5. [___] Email                 #email-input
+  6. [___] Password              #password-input
+```
+
+### Visual Browser Capture
+
+For simple screenshot-based ASCII (less structured but faster):
 
 ```python
 from ascii_cam import browser_to_llm_context
@@ -175,13 +256,12 @@ with sync_playwright() as p:
     page = browser.new_page()
     page.goto("https://example.com")
 
-    # Get ASCII representation for agent
+    # Get visual ASCII screenshot
     context = browser_to_llm_context(
         page,
         task="Find the login button and click it"
     )
 
-    # Agent can now "see" the page as ASCII
     response = agent.process(context)
 ```
 

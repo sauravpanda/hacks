@@ -563,3 +563,47 @@ def browser_to_llm_context(
         raise ValueError(f"Unknown driver type: {driver_type}")
 
     return capture.format_for_agent(ascii_art, url=url, task=task)
+
+
+def semantic_browser_context(
+    url: Optional[str] = None,
+    page=None,
+    task: Optional[str] = None,
+    width: int = 100
+) -> str:
+    """
+    Get semantic ASCII browser context for AI agents.
+
+    This provides a structured DOM-based representation that includes:
+    - Page structure with semantic elements
+    - Interactive elements with selectors
+    - Suggested actions for agents
+
+    Much more useful for agents than visual ASCII screenshots.
+
+    Args:
+        url: URL to render (if no page provided)
+        page: Existing Playwright page object
+        task: Task description for the agent
+        width: Output width
+
+    Returns:
+        Semantic ASCII context for LLM
+
+    Example:
+        >>> context = semantic_browser_context(
+        ...     url="https://example.com",
+        ...     task="Find and click the login button"
+        ... )
+        >>> response = llm.complete(context)
+    """
+    try:
+        from .browser import AgentBrowserContext
+    except ImportError:
+        raise ImportError(
+            "Browser rendering requires Playwright. "
+            "Install with: pip install playwright && playwright install"
+        )
+
+    agent = AgentBrowserContext(width=width)
+    return agent.get_page_context(url=url, page=page, task=task)

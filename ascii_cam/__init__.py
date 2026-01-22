@@ -12,9 +12,10 @@ to ASCII art with support for:
 - Audio visualization
 - Video playback as ASCII
 - LLM context generation for AI agents
+- Semantic browser rendering for AI agents
 """
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __author__ = "ASCII Cam Developer"
 
 from .converter import ASCIIConverter, CharacterSets
@@ -30,7 +31,21 @@ from .llm import (
     video_to_llm_prompt,
     image_to_llm_context,
     browser_to_llm_context,
+    semantic_browser_context,
 )
+
+# Optional browser - requires playwright
+try:
+    from .browser import (
+        BrowserRenderer,
+        AgentBrowserContext,
+        SemanticRenderer,
+        render_url,
+        get_agent_context,
+    )
+    _BROWSER_AVAILABLE = True
+except ImportError:
+    _BROWSER_AVAILABLE = False
 
 # Optional audio - may not be available
 try:
@@ -66,7 +81,17 @@ __all__ = [
     "video_to_llm_prompt",
     "image_to_llm_context",
     "browser_to_llm_context",
+    "semantic_browser_context",
 ]
+
+if _BROWSER_AVAILABLE:
+    __all__.extend([
+        "BrowserRenderer",
+        "AgentBrowserContext",
+        "SemanticRenderer",
+        "render_url",
+        "get_agent_context",
+    ])
 
 if _AUDIO_AVAILABLE:
     __all__.extend(["AudioCapture", "AudioVisualizer", "ASCIIVisualizer"])

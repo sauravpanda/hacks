@@ -608,6 +608,56 @@ def cmd_llm(args):
     return 0
 
 
+def cmd_browse(args):
+    """Handle browser rendering command."""
+    try:
+        from .browser import BrowserRenderer, AgentBrowserContext
+    except ImportError as e:
+        print(f"Error: {e}")
+        print("Install Playwright with: pip install playwright && playwright install")
+        return 1
+
+    url = args.url
+
+    # Validate URL
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+
+    print(f"Rendering: {url}")
+    print("Please wait...")
+
+    try:
+        if args.agent:
+            # Agent context mode
+            agent = AgentBrowserContext(width=args.width, headless=not args.visible)
+            output = agent.get_page_context(url=url, task=args.task)
+        else:
+            # Simple render mode
+            renderer = BrowserRenderer(
+                width=args.width,
+                headless=not args.visible,
+                browser_type=args.browser
+            )
+            output = renderer.render_url(url)
+
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write(output)
+            print(f"Saved to: {args.output}")
+
+            # Show stats
+            tokens = len(output) // 4
+            print(f"Estimated tokens: ~{tokens:,}")
+        else:
+            print(output)
+
+    except Exception as e:
+        print(f"Error rendering page: {e}")
+        return 1
+
+    return 0
+
+
 def add_common_args(parser):
     """Add common arguments to a parser."""
     parser.add_argument("-w", "--width", type=int, help="Output width in characters")
@@ -693,6 +743,18 @@ def main():
     llm_parser.add_argument("-n", "--frames", type=int, default=5, help="Max frames for video")
     llm_parser.add_argument("--interval", type=float, default=2.0, help="Seconds between frames")
     llm_parser.set_defaults(func=cmd_llm)
+
+    # Browse command
+    browse_parser = subparsers.add_parser("browse", aliases=["web"], help="Render website as semantic ASCII")
+    browse_parser.add_argument("url", help="URL to render")
+    browse_parser.add_argument("-o", "--output", help="Output file (prints to stdout if not specified)")
+    browse_parser.add_argument("-w", "--width", type=int, default=100, help="ASCII width")
+    browse_parser.add_argument("-t", "--task", help="Task description for agent context")
+    browse_parser.add_argument("--agent", action="store_true", help="Include agent action suggestions")
+    browse_parser.add_argument("--visible", action="store_true", help="Show browser window (not headless)")
+    browse_parser.add_argument("--browser", choices=["chromium", "firefox", "webkit"], default="chromium",
+                              help="Browser to use")
+    browse_parser.set_defaults(func=cmd_browse)
 
     args = parser.parse_args()
 
