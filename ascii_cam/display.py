@@ -8,7 +8,7 @@ and real-time updates for live streaming.
 import sys
 import os
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, Tuple
 from contextlib import contextmanager
 
 
@@ -140,7 +140,7 @@ class Display:
         return f"\033[90mFPS: {self._fps_counter:.1f} | Frame: {self._frame_count}\033[0m"
 
     @staticmethod
-    def get_terminal_size() -> tuple[int, int]:
+    def get_terminal_size() -> Tuple[int, int]:
         """Get terminal dimensions (columns, rows)."""
         try:
             size = os.get_terminal_size()

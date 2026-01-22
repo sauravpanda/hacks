@@ -5,8 +5,11 @@ Interactive CLI for ASCII Camera Converter.
 Provides a full-featured command-line interface with:
 - Live webcam streaming
 - Image file conversion
+- Video playback as ASCII
+- Audio visualization
+- GIF/Video recording and export
+- LLM context generation
 - Interactive keyboard controls
-- Multiple output modes and effects
 """
 
 import argparse
@@ -45,6 +48,7 @@ Keyboard Controls:
   e           Toggle edge detection
   b           Toggle braille mode
   i           Toggle invert
+  r           Toggle recording
   + / -       Adjust width
   [ / ]       Adjust brightness
   { / }       Adjust contrast
@@ -128,6 +132,10 @@ class ASCIICamApp:
         )
         self.display = Display(target_fps=fps)
         self.edge_detector = EdgeDetector(method="canny")
+
+        # Recording state
+        self.recorder = None
+        self._recording = False
 
         # State
         self._running = False
@@ -226,6 +234,10 @@ class ASCIICamApp:
 
                 ascii_art = self._process_frame(frame)
 
+                # Record if enabled
+                if self._recording and self.recorder:
+                    self.recorder.add_frame(ascii_art, has_color=self.color)
+
                 # Add status bar
                 status = self._get_status_bar()
                 output = f"{ascii_art}\n{status}"
@@ -261,6 +273,8 @@ class ASCIICamApp:
         elif key_char == 'i':
             self.invert = not self.invert
             self.converter.invert = self.invert
+        elif key_char == 'r':
+            self._toggle_recording()
         elif key_char in ('+', '='):
             self.width = min(self.width + 10, 300)
             self.converter.width = self.width
@@ -289,6 +303,33 @@ class ASCIICamApp:
         elif key_char == ' ':
             self._paused = not self._paused
 
+    def _toggle_recording(self):
+        """Toggle recording on/off."""
+        from .recorder import ASCIIRecorder
+
+        if self._recording:
+            self._recording = False
+            if self.recorder and self.recorder.frame_count > 0:
+                self._save_recording()
+        else:
+            self.recorder = ASCIIRecorder()
+            self.recorder.start()
+            self._recording = True
+
+    def _save_recording(self):
+        """Save recorded frames to GIF."""
+        from .recorder import GIFExporter
+
+        if not self.recorder or self.recorder.frame_count == 0:
+            return
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"ascii_recording_{timestamp}.gif"
+
+        exporter = GIFExporter()
+        exporter.export(self.recorder.frames, filename, fps=10)
+        print(f"\nSaved recording to: {filename}")
+
     def _get_status_bar(self) -> str:
         """Generate status bar text."""
         parts = [
@@ -303,6 +344,8 @@ class ASCIICamApp:
             parts.append("EDGE")
         if self.invert:
             parts.append("INV")
+        if self._recording:
+            parts.append(f"●REC({self.recorder.frame_count})")
         if self._paused:
             parts.append("PAUSED")
 
@@ -321,7 +364,6 @@ class ASCIICamApp:
         """Save current frame as ASCII art."""
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         filename = f"ascii_screenshot_{timestamp}.txt"
-        # Would need to store last frame for this
         print(f"\nScreenshot would be saved to: {filename}")
 
     def convert_image(
@@ -368,112 +410,8 @@ class ASCIICamApp:
         return 0
 
 
-def main():
-    """Main entry point for CLI."""
-    parser = argparse.ArgumentParser(
-        description="ASCII Camera - Convert images and camera feed to ASCII art",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  ascii-cam                     Start live camera mode
-  ascii-cam image.jpg           Convert a single image
-  ascii-cam -c -w 120           Camera with color, 120 chars wide
-  ascii-cam image.png -o out.txt Save to file
-  ascii-cam --mock              Test with mock camera (no webcam needed)
-
-Character Sets (use -s option):
-  standard  - Basic ASCII chars: .:-=+*#%@
-  detailed  - Extended ASCII for better gradients
-  blocks    - Block characters: ░▒▓█
-  minimal   - Simple set: .-+*#
-  braille   - High-res braille patterns
-"""
-    )
-
-    # Positional argument for image file
-    parser.add_argument(
-        "image",
-        nargs="?",
-        help="Image file to convert (omit for camera mode)"
-    )
-
-    # Output options
-    parser.add_argument(
-        "-o", "--output",
-        help="Output file path"
-    )
-    parser.add_argument(
-        "--html",
-        action="store_true",
-        help="Save as HTML (preserves colors)"
-    )
-
-    # Display options
-    parser.add_argument(
-        "-w", "--width",
-        type=int,
-        help="Output width in characters (default: terminal width)"
-    )
-    parser.add_argument(
-        "-c", "--color",
-        action="store_true",
-        help="Enable colored output"
-    )
-    parser.add_argument(
-        "-s", "--charset",
-        choices=["standard", "detailed", "blocks", "minimal", "braille"],
-        default="standard",
-        help="Character set to use"
-    )
-    parser.add_argument(
-        "-i", "--invert",
-        action="store_true",
-        help="Invert brightness (light on dark)"
-    )
-
-    # Adjustments
-    parser.add_argument(
-        "-b", "--brightness",
-        type=float,
-        default=1.0,
-        help="Brightness adjustment (default: 1.0)"
-    )
-    parser.add_argument(
-        "--contrast",
-        type=float,
-        default=1.0,
-        help="Contrast adjustment (default: 1.0)"
-    )
-
-    # Effects
-    parser.add_argument(
-        "-e", "--edge",
-        action="store_true",
-        help="Enable edge detection mode"
-    )
-
-    # Camera options
-    parser.add_argument(
-        "--camera",
-        type=int,
-        default=0,
-        help="Camera device ID (default: 0)"
-    )
-    parser.add_argument(
-        "--fps",
-        type=int,
-        default=15,
-        help="Target FPS for camera mode (default: 15)"
-    )
-    parser.add_argument(
-        "--mock",
-        action="store_true",
-        help="Use mock camera for testing"
-    )
-
-    args = parser.parse_args()
-
-    # Create application
+def cmd_camera(args):
+    """Handle camera command."""
     app = ASCIICamApp(
         width=args.width,
         color=args.color,
@@ -485,16 +423,356 @@ Character Sets (use -s option):
         fps=args.fps,
         camera_id=args.camera
     )
+    return app.run_camera(mock=args.mock)
 
-    # Run appropriate mode
-    if args.image:
-        return app.convert_image(
-            args.image,
-            output_path=args.output,
-            html=args.html
+
+def cmd_image(args):
+    """Handle image conversion command."""
+    app = ASCIICamApp(
+        width=args.width,
+        color=args.color,
+        charset=args.charset,
+        edge_mode=args.edge,
+        invert=args.invert,
+        brightness=args.brightness,
+        contrast=args.contrast,
+    )
+    return app.convert_image(args.image, args.output, args.html)
+
+
+def cmd_video(args):
+    """Handle video playback command."""
+    from .player import ASCIIVideoPlayer
+
+    player = ASCIIVideoPlayer(
+        args.video,
+        width=args.width,
+        color=args.color,
+        charset=args.charset
+    )
+    player.play()
+    return 0
+
+
+def cmd_audio(args):
+    """Handle audio visualizer command."""
+    try:
+        from .audio import AudioVisualizer, MockAudioCapture
+    except ImportError:
+        print("Error: PyAudio is required for audio visualization.")
+        print("Install with: pip install pyaudio")
+        return 1
+
+    from .display import Display
+
+    # Auto-detect dimensions
+    cols, rows = Display.get_terminal_size()
+    width = args.width or (cols - 2)
+    height = args.height or (rows - 4)
+
+    visualizer = AudioVisualizer(
+        width=width,
+        height=height,
+        mode=args.mode,
+        color=args.color,
+        mock=args.mock
+    )
+
+    display = Display(target_fps=30)
+
+    print(f"Audio Visualizer - Mode: {args.mode}")
+    print("Press Ctrl+C to quit")
+    time.sleep(1)
+
+    display.clear()
+
+    try:
+        with visualizer:
+            while True:
+                frame = visualizer.get_frame()
+                if frame:
+                    display.render_frame(frame)
+                time.sleep(0.016)  # ~60fps
+    except KeyboardInterrupt:
+        pass
+
+    display.show_cursor()
+    print("\nAudio visualizer ended.")
+    return 0
+
+
+def cmd_record(args):
+    """Handle recording command."""
+    from .recorder import ASCIIRecorder, GIFExporter, VideoExporter
+
+    app = ASCIICamApp(
+        width=args.width,
+        color=args.color,
+        charset=args.charset,
+        fps=args.fps,
+    )
+
+    recorder = ASCIIRecorder(max_frames=args.max_frames)
+
+    # Initialize camera
+    if args.mock:
+        camera = MockCamera(pattern="gradient")
+    else:
+        camera = Camera(source=args.camera)
+
+    with camera:
+        if not camera.is_open:
+            print(f"Error: Could not open camera")
+            return 1
+
+        print(f"Recording for {args.duration} seconds...")
+        print("Press Ctrl+C to stop early")
+
+        recorder.start()
+        start_time = time.time()
+
+        try:
+            while time.time() - start_time < args.duration:
+                frame = camera.read()
+                if frame is None:
+                    break
+
+                ascii_art = app._process_frame(frame)
+                recorder.add_frame(ascii_art, has_color=args.color)
+
+                # Show progress
+                elapsed = time.time() - start_time
+                print(f"\rFrames: {recorder.frame_count} | Time: {elapsed:.1f}s", end="")
+                time.sleep(1.0 / args.fps)
+
+        except KeyboardInterrupt:
+            pass
+
+        recorder.stop()
+
+    print(f"\n\nRecorded {recorder.frame_count} frames")
+
+    # Export
+    output = args.output or f"recording_{time.strftime('%Y%m%d_%H%M%S')}"
+
+    if args.format == "gif":
+        if not output.endswith('.gif'):
+            output += '.gif'
+        exporter = GIFExporter()
+        exporter.export(recorder.frames, output, fps=args.fps)
+    else:
+        if not output.endswith('.mp4'):
+            output += '.mp4'
+        exporter = VideoExporter()
+        exporter.export(recorder.frames, output, fps=args.fps)
+
+    print(f"Saved to: {output}")
+    return 0
+
+
+def cmd_llm(args):
+    """Handle LLM context generation command."""
+    from .llm import video_to_llm_prompt, image_to_llm_context
+
+    input_path = args.input
+
+    if input_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
+        # Video file
+        prompt = video_to_llm_prompt(
+            input_path,
+            task=args.task,
+            width=args.width,
+            max_frames=args.frames,
+            sample_interval=args.interval
         )
     else:
-        return app.run_camera(mock=args.mock)
+        # Image file
+        prompt = image_to_llm_context(
+            input_path,
+            width=args.width,
+            task=args.task
+        )
+
+    if args.output:
+        with open(args.output, 'w') as f:
+            f.write(prompt)
+        print(f"Saved LLM context to: {args.output}")
+
+        # Show stats
+        from .llm import LLMContextBuilder
+        tokens = len(prompt) // 4
+        print(f"Estimated tokens: ~{tokens:,}")
+    else:
+        print(prompt)
+
+    return 0
+
+
+def cmd_browse(args):
+    """Handle browser rendering command."""
+    try:
+        from .browser import BrowserRenderer, AgentBrowserContext
+    except ImportError as e:
+        print(f"Error: {e}")
+        print("Install Playwright with: pip install playwright && playwright install")
+        return 1
+
+    url = args.url
+
+    # Validate URL
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+
+    print(f"Rendering: {url}")
+    print("Please wait...")
+
+    try:
+        if args.agent:
+            # Agent context mode
+            agent = AgentBrowserContext(width=args.width, headless=not args.visible)
+            output = agent.get_page_context(url=url, task=args.task)
+        else:
+            # Simple render mode
+            renderer = BrowserRenderer(
+                width=args.width,
+                headless=not args.visible,
+                browser_type=args.browser
+            )
+            output = renderer.render_url(url)
+
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write(output)
+            print(f"Saved to: {args.output}")
+
+            # Show stats
+            tokens = len(output) // 4
+            print(f"Estimated tokens: ~{tokens:,}")
+        else:
+            print(output)
+
+    except Exception as e:
+        print(f"Error rendering page: {e}")
+        return 1
+
+    return 0
+
+
+def add_common_args(parser):
+    """Add common arguments to a parser."""
+    parser.add_argument("-w", "--width", type=int, help="Output width in characters")
+    parser.add_argument("-c", "--color", action="store_true", help="Enable colored output")
+    parser.add_argument(
+        "-s", "--charset",
+        choices=["standard", "detailed", "blocks", "minimal", "braille"],
+        default="standard",
+        help="Character set to use"
+    )
+    parser.add_argument("-i", "--invert", action="store_true", help="Invert brightness")
+    parser.add_argument("-b", "--brightness", type=float, default=1.0, help="Brightness adjustment")
+    parser.add_argument("--contrast", type=float, default=1.0, help="Contrast adjustment")
+    parser.add_argument("-e", "--edge", action="store_true", help="Enable edge detection")
+
+
+def main():
+    """Main entry point for CLI."""
+    parser = argparse.ArgumentParser(
+        description="ASCII Cam - Convert images, video, and camera feed to ASCII art",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Camera command (default)
+    cam_parser = subparsers.add_parser("camera", aliases=["cam"], help="Live camera mode")
+    add_common_args(cam_parser)
+    cam_parser.add_argument("--camera", type=int, default=0, help="Camera device ID")
+    cam_parser.add_argument("--fps", type=int, default=15, help="Target FPS")
+    cam_parser.add_argument("--mock", action="store_true", help="Use mock camera")
+    cam_parser.set_defaults(func=cmd_camera)
+
+    # Image command
+    img_parser = subparsers.add_parser("image", aliases=["img"], help="Convert image to ASCII")
+    img_parser.add_argument("image", help="Image file to convert")
+    img_parser.add_argument("-o", "--output", help="Output file path")
+    img_parser.add_argument("--html", action="store_true", help="Save as HTML")
+    add_common_args(img_parser)
+    img_parser.set_defaults(func=cmd_image)
+
+    # Video command
+    vid_parser = subparsers.add_parser("video", aliases=["vid", "play"], help="Play video as ASCII")
+    vid_parser.add_argument("video", help="Video file to play")
+    vid_parser.add_argument("-w", "--width", type=int, help="Output width")
+    vid_parser.add_argument("-c", "--color", action="store_true", help="Enable color")
+    vid_parser.add_argument("-s", "--charset", default="standard", help="Character set")
+    vid_parser.set_defaults(func=cmd_video)
+
+    # Audio command
+    audio_parser = subparsers.add_parser("audio", aliases=["viz"], help="Audio visualizer")
+    audio_parser.add_argument(
+        "-m", "--mode",
+        choices=["spectrum", "waveform", "vu", "oscilloscope", "circular"],
+        default="spectrum",
+        help="Visualization mode"
+    )
+    audio_parser.add_argument("-w", "--width", type=int, help="Output width")
+    audio_parser.add_argument("--height", type=int, help="Output height")
+    audio_parser.add_argument("-c", "--color", action="store_true", default=True, help="Enable color")
+    audio_parser.add_argument("--no-color", dest="color", action="store_false", help="Disable color")
+    audio_parser.add_argument("--mock", action="store_true", help="Use mock audio")
+    audio_parser.set_defaults(func=cmd_audio)
+
+    # Record command
+    rec_parser = subparsers.add_parser("record", aliases=["rec"], help="Record camera to GIF/video")
+    rec_parser.add_argument("-o", "--output", help="Output file path")
+    rec_parser.add_argument("-d", "--duration", type=float, default=5.0, help="Recording duration (seconds)")
+    rec_parser.add_argument("-f", "--format", choices=["gif", "mp4"], default="gif", help="Output format")
+    rec_parser.add_argument("--max-frames", type=int, default=500, help="Maximum frames to record")
+    rec_parser.add_argument("--camera", type=int, default=0, help="Camera device ID")
+    rec_parser.add_argument("--fps", type=int, default=10, help="Recording FPS")
+    rec_parser.add_argument("--mock", action="store_true", help="Use mock camera")
+    add_common_args(rec_parser)
+    rec_parser.set_defaults(func=cmd_record)
+
+    # LLM command
+    llm_parser = subparsers.add_parser("llm", help="Generate LLM context from image/video")
+    llm_parser.add_argument("input", help="Image or video file")
+    llm_parser.add_argument("-o", "--output", help="Output file (prints to stdout if not specified)")
+    llm_parser.add_argument("-w", "--width", type=int, default=60, help="ASCII width (smaller = fewer tokens)")
+    llm_parser.add_argument("-t", "--task", default="describe", help="Analysis task (describe, analyze, summarize)")
+    llm_parser.add_argument("-n", "--frames", type=int, default=5, help="Max frames for video")
+    llm_parser.add_argument("--interval", type=float, default=2.0, help="Seconds between frames")
+    llm_parser.set_defaults(func=cmd_llm)
+
+    # Browse command
+    browse_parser = subparsers.add_parser("browse", aliases=["web"], help="Render website as semantic ASCII")
+    browse_parser.add_argument("url", help="URL to render")
+    browse_parser.add_argument("-o", "--output", help="Output file (prints to stdout if not specified)")
+    browse_parser.add_argument("-w", "--width", type=int, default=100, help="ASCII width")
+    browse_parser.add_argument("-t", "--task", help="Task description for agent context")
+    browse_parser.add_argument("--agent", action="store_true", help="Include agent action suggestions")
+    browse_parser.add_argument("--visible", action="store_true", help="Show browser window (not headless)")
+    browse_parser.add_argument("--browser", choices=["chromium", "firefox", "webkit"], default="chromium",
+                              help="Browser to use")
+    browse_parser.set_defaults(func=cmd_browse)
+
+    args = parser.parse_args()
+
+    # Handle no command (default to camera)
+    if args.command is None:
+        # Check if there's a positional argument that looks like an image
+        if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+            # Assume it's an image
+            args = parser.parse_args(["image"] + sys.argv[1:])
+        else:
+            # Default to camera
+            args = parser.parse_args(["camera"] + sys.argv[1:])
+
+    if hasattr(args, 'func'):
+        return args.func(args)
+    else:
+        parser.print_help()
+        return 0
 
 
 if __name__ == "__main__":
