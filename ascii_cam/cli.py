@@ -797,11 +797,11 @@ def main():
     browse_parser = subparsers.add_parser("browse", aliases=["web"], help="Render website as ASCII art")
     browse_parser.add_argument("url", help="URL to render")
     browse_parser.add_argument("-o", "--output", help="Output file (prints to stdout if not specified)")
-    browse_parser.add_argument("-w", "--width", type=int, default=120, help="ASCII width (default: 120)")
+    browse_parser.add_argument("-w", "--width", type=int, default=160, help="ASCII width (default: 160)")
     browse_parser.add_argument("-m", "--mode", choices=["visual", "semantic"], default="visual",
                               help="Rendering mode: visual (screenshot ASCII) or semantic (DOM text)")
     browse_parser.add_argument("-c", "--charset", choices=["standard", "detailed", "blocks", "braille", "minimal"],
-                              default="blocks", help="Character set for visual mode (default: blocks)")
+                              default="detailed", help="Character set for visual mode (default: detailed)")
     browse_parser.add_argument("--no-color", action="store_true", help="Disable color output")
     browse_parser.add_argument("--full-page", action="store_true", help="Capture full scrollable page")
     browse_parser.add_argument("-t", "--task", help="Task description for agent context")
