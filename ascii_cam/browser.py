@@ -33,6 +33,7 @@ class ElementType(Enum):
     HEADING = "heading"
     PARAGRAPH = "paragraph"
     LIST = "list"
+    LIST_ITEM = "list_item"
     TABLE = "table"
     NAV = "nav"
     HEADER = "header"
@@ -58,14 +59,6 @@ class BoundingBox:
     def center(self) -> Tuple[float, float]:
         return (self.x + self.width / 2, self.y + self.height / 2)
 
-    @property
-    def right(self) -> float:
-        return self.x + self.width
-
-    @property
-    def bottom(self) -> float:
-        return self.y + self.height
-
 
 @dataclass
 class InteractiveElement:
@@ -80,16 +73,6 @@ class InteractiveElement:
     attributes: Dict[str, str] = field(default_factory=dict)
     is_visible: bool = True
     is_enabled: bool = True
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "index": self.index,
-            "type": self.element_type.value,
-            "tag": self.tag,
-            "text": self.text[:50] + "..." if len(self.text) > 50 else self.text,
-            "selector": self.selector,
-            "bbox": f"({self.bbox.x:.0f},{self.bbox.y:.0f})" if self.bbox else None,
-        }
 
 
 @dataclass
@@ -106,6 +89,7 @@ class DOMNode:
     depth: int = 0
     is_visible: bool = True
     is_interactive: bool = False
+    full_text: str = ""  # All text content including children
 
 
 @dataclass
@@ -121,245 +105,246 @@ class PageInfo:
 
 class BoxChars:
     """Box-drawing characters for ASCII layout."""
-    # Single line
     H = "─"
     V = "│"
     TL = "┌"
     TR = "┐"
     BL = "└"
     BR = "┘"
-    T = "┬"
-    B = "┴"
-    L = "├"
-    R = "┤"
-    X = "┼"
-
-    # Double line
-    DH = "═"
-    DV = "║"
     DTL = "╔"
     DTR = "╗"
     DBL = "╚"
     DBR = "╝"
-
-    # Rounded
-    RTL = "╭"
-    RTR = "╮"
-    RBL = "╰"
-    RBR = "╯"
+    DH = "═"
+    DV = "║"
 
 
 class SemanticRenderer:
     """
-    Renders DOM structure as semantic ASCII.
+    Renders DOM structure as clean, semantic ASCII.
 
-    Creates a structured text representation that:
-    - Shows page layout with box-drawing characters
-    - Highlights interactive elements
-    - Preserves semantic meaning
-    - Lists actionable elements with selectors
+    Focuses on meaningful content and interactive elements,
+    filtering out noisy wrapper divs common in modern SPAs.
     """
 
-    # Element type icons/prefixes
-    ICONS = {
-        ElementType.BUTTON: "[btn]",
-        ElementType.LINK: "[→]",
-        ElementType.INPUT: "[___]",
-        ElementType.SELECT: "[▼]",
-        ElementType.TEXTAREA: "[txt]",
-        ElementType.CHECKBOX: "[☐]",
-        ElementType.RADIO: "(○)",
-        ElementType.IMAGE: "[img]",
-        ElementType.VIDEO: "[▶]",
-        ElementType.FORM: "form",
-        ElementType.HEADING: "#",
-        ElementType.NAV: "NAV",
-        ElementType.HEADER: "HEADER",
-        ElementType.FOOTER: "FOOTER",
-        ElementType.MAIN: "MAIN",
-        ElementType.SECTION: "SECTION",
-        ElementType.ARTICLE: "ARTICLE",
-        ElementType.ASIDE: "ASIDE",
+    # Semantic landmark elements worth showing
+    LANDMARKS = {
+        ElementType.HEADER, ElementType.NAV, ElementType.MAIN,
+        ElementType.FOOTER, ElementType.SECTION, ElementType.ARTICLE,
+        ElementType.ASIDE, ElementType.FORM
     }
 
-    def __init__(
-        self,
-        width: int = 100,
-        show_hidden: bool = False,
-        max_depth: int = 10,
-        show_attributes: bool = False
-    ):
-        """
-        Initialize renderer.
-
-        Args:
-            width: Output width in characters
-            show_hidden: Include hidden elements
-            max_depth: Maximum DOM depth to render
-            show_attributes: Show element attributes
-        """
+    def __init__(self, width: int = 100, max_depth: int = 6):
         self.width = width
-        self.show_hidden = show_hidden
         self.max_depth = max_depth
-        self.show_attributes = show_attributes
 
     def render(self, page_info: PageInfo) -> str:
-        """
-        Render page as semantic ASCII.
-
-        Args:
-            page_info: Page information with DOM tree
-
-        Returns:
-            Semantic ASCII representation
-        """
+        """Render page as clean semantic ASCII."""
         lines = []
 
-        # Header
+        # Header box
         lines.append(self._render_header(page_info))
         lines.append("")
 
-        # Page structure
+        # Main content - clean extraction
         if page_info.dom_tree:
-            lines.append("## Page Structure")
+            lines.append("## Page Content")
             lines.append("")
-            structure = self._render_dom_tree(page_info.dom_tree)
-            lines.extend(structure)
+            content = self._extract_meaningful_content(page_info.dom_tree)
+            lines.extend(content)
             lines.append("")
 
-        # Interactive elements
+        # Interactive elements - clean list
         if page_info.interactive_elements:
-            lines.append("## Interactive Elements")
+            lines.append("## Interactive Elements (use these selectors)")
             lines.append("")
-            elements = self._render_interactive_elements(page_info.interactive_elements)
+            elements = self._render_interactive_list(page_info.interactive_elements)
             lines.extend(elements)
 
         return "\n".join(lines)
 
     def _render_header(self, page_info: PageInfo) -> str:
-        """Render page header info."""
-        box_width = self.width - 2
-        title = page_info.title[:box_width - 4] if page_info.title else "Untitled"
-        url = page_info.url[:box_width - 4] if page_info.url else ""
+        """Render page header."""
+        w = self.width - 2
+        title = (page_info.title or "Untitled")[:w-2]
+        url = (page_info.url or "")[:w-2]
 
-        lines = [
-            BoxChars.DTL + BoxChars.DH * box_width + BoxChars.DTR,
-            BoxChars.DV + f" {title}".ljust(box_width) + BoxChars.DV,
-            BoxChars.DV + f" {url}".ljust(box_width) + BoxChars.DV,
-            BoxChars.DV + f" Size: {page_info.width}x{page_info.height}".ljust(box_width) + BoxChars.DV,
-            BoxChars.DBL + BoxChars.DH * box_width + BoxChars.DBR,
-        ]
-        return "\n".join(lines)
+        return "\n".join([
+            BoxChars.DTL + BoxChars.DH * w + BoxChars.DTR,
+            BoxChars.DV + f" {title}".ljust(w) + BoxChars.DV,
+            BoxChars.DV + f" {url}".ljust(w) + BoxChars.DV,
+            BoxChars.DBL + BoxChars.DH * w + BoxChars.DBR,
+        ])
 
-    def _render_dom_tree(self, node: DOMNode, depth: int = 0) -> List[str]:
-        """Recursively render DOM tree."""
+    def _extract_meaningful_content(self, node: DOMNode, depth: int = 0) -> List[str]:
+        """Extract only meaningful content, skipping wrapper noise."""
         lines = []
+        indent = "  " * min(depth, 4)
 
-        if depth > self.max_depth:
-            return ["  " * depth + "..."]
-
-        if not self.show_hidden and not node.is_visible:
+        # Skip invisible
+        if not node.is_visible:
             return []
 
-        # Indentation
-        indent = "  " * depth
-        prefix = "├─ " if depth > 0 else ""
+        # Check if this node is meaningful
+        is_landmark = node.element_type in self.LANDMARKS
+        is_heading = node.element_type == ElementType.HEADING
+        is_interactive = node.is_interactive
+        has_direct_text = bool(node.text.strip())
+        is_list_item = node.element_type == ElementType.LIST_ITEM
 
-        # Get icon/label
-        icon = self.ICONS.get(node.element_type, "")
-        if icon:
-            icon = f"{icon} "
+        # Render meaningful nodes
+        if is_landmark:
+            # Show landmark with box
+            name = node.tag.upper()
+            lines.append(f"{indent}┌─ {name} {'─' * (20 - len(name))}┐")
+            # Recurse into children
+            for child in node.children:
+                lines.extend(self._extract_meaningful_content(child, depth + 1))
+            lines.append(f"{indent}└{'─' * 23}┘")
 
-        # Build node line
-        text = self._truncate(node.text, self.width - len(indent) - len(prefix) - len(icon) - 20)
+        elif is_heading:
+            level = node.tag[1] if len(node.tag) > 1 and node.tag[1].isdigit() else "1"
+            text = node.full_text or node.text
+            if text.strip():
+                lines.append(f"{indent}{'#' * int(level)} {self._clean_text(text)}")
 
-        if node.is_interactive:
-            # Highlight interactive elements
-            if node.element_type == ElementType.BUTTON:
-                node_str = f"[ {text or 'Button'} ]"
-            elif node.element_type == ElementType.LINK:
-                href = node.attributes.get('href', '')[:30]
-                node_str = f"→ {text or href}"
-            elif node.element_type == ElementType.INPUT:
-                input_type = node.attributes.get('type', 'text')
-                placeholder = node.attributes.get('placeholder', '')
-                node_str = f"[{input_type}: {placeholder or '___'}]"
-            elif node.element_type == ElementType.SELECT:
-                node_str = f"[▼ {text or 'Select'}]"
-            elif node.element_type == ElementType.CHECKBOX:
-                checked = "☑" if node.attributes.get('checked') else "☐"
-                node_str = f"[{checked}] {text}"
-            elif node.element_type == ElementType.RADIO:
-                checked = "●" if node.attributes.get('checked') else "○"
-                node_str = f"({checked}) {text}"
-            else:
-                node_str = f"{icon}{text}"
-        else:
-            # Structural elements
-            if node.element_type in (ElementType.HEADER, ElementType.NAV, ElementType.MAIN,
-                                     ElementType.FOOTER, ElementType.SECTION, ElementType.ARTICLE):
-                node_str = f"┌─ {icon}{node.tag.upper()} ─┐"
-            elif node.element_type == ElementType.HEADING:
-                level = node.tag[1] if len(node.tag) > 1 else "1"
-                node_str = f"{'#' * int(level)} {text}"
-            elif text:
-                node_str = f"{icon}{text}"
-            else:
-                node_str = f"<{node.tag}>"
+        elif is_interactive:
+            line = self._render_interactive_node(node, indent)
+            if line:
+                lines.append(line)
 
-        if node_str.strip():
-            # Add selector hint for interactive elements
-            if node.is_interactive and node.selector:
-                short_selector = node.selector[:30]
-                node_str += f"  #{short_selector}" if len(node.selector) <= 30 else f"  #{short_selector}..."
+        elif is_list_item and (node.text.strip() or node.full_text.strip()):
+            text = self._clean_text(node.full_text or node.text)
+            if text:
+                lines.append(f"{indent}• {text}")
 
-            lines.append(f"{indent}{prefix}{node_str}")
+        elif has_direct_text and node.element_type == ElementType.PARAGRAPH:
+            text = self._clean_text(node.text)
+            if text and len(text) > 10:  # Skip tiny fragments
+                lines.append(f"{indent}{text}")
 
-        # Render children
-        visible_children = [c for c in node.children if self.show_hidden or c.is_visible]
-        for i, child in enumerate(visible_children):
-            child_lines = self._render_dom_tree(child, depth + 1)
-            lines.extend(child_lines)
+        elif has_direct_text and depth < 3:
+            # Show meaningful text at top levels
+            text = self._clean_text(node.text)
+            if text and len(text) > 15:
+                lines.append(f"{indent}{text}")
+
+        # For non-landmark containers, just recurse without adding structure
+        if not is_landmark and not is_interactive:
+            for child in node.children:
+                child_lines = self._extract_meaningful_content(child, depth)
+                lines.extend(child_lines)
 
         return lines
 
-    def _render_interactive_elements(self, elements: List[InteractiveElement]) -> List[str]:
-        """Render list of interactive elements."""
+    def _render_interactive_node(self, node: DOMNode, indent: str) -> str:
+        """Render an interactive element inline."""
+        text = self._clean_text(node.full_text or node.text)
+        selector = self._short_selector(node.selector)
+
+        if node.element_type == ElementType.BUTTON:
+            label = text or "Button"
+            return f"{indent}[BUTTON: {label}]  → {selector}"
+
+        elif node.element_type == ElementType.LINK:
+            href = node.attributes.get('href', '')
+            label = text or href[:30] or "Link"
+            return f"{indent}[LINK: {label}]  → {selector}"
+
+        elif node.element_type == ElementType.INPUT:
+            input_type = node.attributes.get('type', 'text')
+            placeholder = node.attributes.get('placeholder', '')
+            label = placeholder or node.attributes.get('name', '') or input_type
+            return f"{indent}[INPUT ({input_type}): {label}]  → {selector}"
+
+        elif node.element_type == ElementType.TEXTAREA:
+            placeholder = node.attributes.get('placeholder', 'text area')
+            return f"{indent}[TEXTAREA: {placeholder}]  → {selector}"
+
+        elif node.element_type == ElementType.SELECT:
+            return f"{indent}[SELECT: dropdown]  → {selector}"
+
+        elif node.element_type == ElementType.CHECKBOX:
+            label = text or "checkbox"
+            return f"{indent}[CHECKBOX: {label}]  → {selector}"
+
+        elif node.element_type == ElementType.RADIO:
+            label = text or "radio"
+            return f"{indent}[RADIO: {label}]  → {selector}"
+
+        return ""
+
+    def _render_interactive_list(self, elements: List[InteractiveElement]) -> List[str]:
+        """Render a clean list of interactive elements."""
         lines = []
 
         # Group by type
-        by_type: Dict[ElementType, List[InteractiveElement]] = {}
-        for elem in elements:
-            if elem.element_type not in by_type:
-                by_type[elem.element_type] = []
-            by_type[elem.element_type].append(elem)
+        buttons = [e for e in elements if e.element_type == ElementType.BUTTON]
+        links = [e for e in elements if e.element_type == ElementType.LINK]
+        inputs = [e for e in elements if e.element_type in (
+            ElementType.INPUT, ElementType.TEXTAREA, ElementType.SELECT,
+            ElementType.CHECKBOX, ElementType.RADIO
+        )]
 
-        # Render each group
-        for elem_type in [ElementType.BUTTON, ElementType.LINK, ElementType.INPUT,
-                          ElementType.SELECT, ElementType.CHECKBOX, ElementType.RADIO]:
-            if elem_type in by_type:
-                type_name = elem_type.value.upper() + "S"
-                lines.append(f"### {type_name}")
+        if buttons:
+            lines.append("BUTTONS:")
+            for e in buttons[:15]:  # Limit
+                text = self._clean_text(e.text) or "button"
+                sel = self._short_selector(e.selector)
+                lines.append(f"  {e.index:2d}. [{text[:30]}]  → {sel}")
+            lines.append("")
 
-                for elem in by_type[elem_type][:20]:  # Limit to 20 per type
-                    text = self._truncate(elem.text, 40)
-                    pos = f"@({elem.bbox.x:.0f},{elem.bbox.y:.0f})" if elem.bbox else ""
+        if links:
+            lines.append("LINKS:")
+            for e in links[:20]:  # Limit
+                text = self._clean_text(e.text)
+                href = e.attributes.get('href', '')[:40]
+                label = text or href or "link"
+                sel = self._short_selector(e.selector)
+                lines.append(f"  {e.index:2d}. {label[:40]}  → {sel}")
+            lines.append("")
 
-                    icon = self.ICONS.get(elem_type, "")
-                    selector_hint = elem.selector[:40]
-
-                    line = f"  {elem.index:3d}. {icon} {text or '(no text)':<40} {selector_hint}"
-                    lines.append(line)
-
-                lines.append("")
+        if inputs:
+            lines.append("INPUTS:")
+            for e in inputs[:15]:  # Limit
+                input_type = e.attributes.get('type', 'text')
+                placeholder = e.attributes.get('placeholder', '')
+                name = e.attributes.get('name', '')
+                label = placeholder or name or input_type
+                sel = self._short_selector(e.selector)
+                lines.append(f"  {e.index:2d}. [{input_type}] {label[:30]}  → {sel}")
 
         return lines
 
-    def _truncate(self, text: str, max_len: int) -> str:
-        """Truncate text to max length."""
+    def _clean_text(self, text: str) -> str:
+        """Clean and normalize text."""
         if not text:
             return ""
-        text = " ".join(text.split())  # Normalize whitespace
+        # Normalize whitespace
+        text = " ".join(text.split())
+        # Truncate
+        if len(text) > 80:
+            text = text[:77] + "..."
+        return text
+
+    def _short_selector(self, selector: str) -> str:
+        """Shorten selector for display."""
+        if not selector:
+            return ""
+        # Prefer ID
+        if selector.startswith('#'):
+            return selector[:40]
+        # Shorten class selectors
+        if '.' in selector:
+            parts = selector.split('.')
+            if len(parts) > 2:
+                return f"{parts[0]}.{parts[1]}"
+        return selector[:40]
+
+    def _truncate(self, text: str, max_len: int) -> str:
+        if not text:
+            return ""
+        text = " ".join(text.split())
         if len(text) <= max_len:
             return text
         return text[:max_len - 3] + "..."
@@ -369,8 +354,8 @@ class BrowserRenderer:
     """
     Main browser rendering class.
 
-    Connects to a browser via Playwright or Selenium,
-    extracts DOM structure, and renders as semantic ASCII.
+    Connects to a browser via Playwright, extracts DOM structure,
+    and renders as semantic ASCII.
     """
 
     def __init__(
@@ -379,32 +364,40 @@ class BrowserRenderer:
         headless: bool = True,
         browser_type: str = "chromium"
     ):
-        """
-        Initialize browser renderer.
-
-        Args:
-            width: ASCII output width
-            headless: Run browser in headless mode
-            browser_type: Browser to use (chromium, firefox, webkit)
-        """
         self.width = width
         self.headless = headless
         self.browser_type = browser_type
         self.renderer = SemanticRenderer(width=width)
 
-        self._playwright = None
-        self._browser = None
-        self._page = None
-
     def _get_element_type(self, tag: str, attrs: Dict[str, str]) -> ElementType:
         """Determine element type from tag and attributes."""
         tag = tag.lower()
 
-        if tag == "button":
-            return ElementType.BUTTON
-        elif tag == "a":
-            return ElementType.LINK
-        elif tag == "input":
+        type_map = {
+            "button": ElementType.BUTTON,
+            "a": ElementType.LINK,
+            "select": ElementType.SELECT,
+            "textarea": ElementType.TEXTAREA,
+            "img": ElementType.IMAGE,
+            "video": ElementType.VIDEO,
+            "form": ElementType.FORM,
+            "p": ElementType.PARAGRAPH,
+            "ul": ElementType.LIST,
+            "ol": ElementType.LIST,
+            "li": ElementType.LIST_ITEM,
+            "table": ElementType.TABLE,
+            "nav": ElementType.NAV,
+            "header": ElementType.HEADER,
+            "footer": ElementType.FOOTER,
+            "main": ElementType.MAIN,
+            "section": ElementType.SECTION,
+            "article": ElementType.ARTICLE,
+            "aside": ElementType.ASIDE,
+            "div": ElementType.DIV,
+            "span": ElementType.SPAN,
+        }
+
+        if tag == "input":
             input_type = attrs.get("type", "text").lower()
             if input_type == "checkbox":
                 return ElementType.CHECKBOX
@@ -412,46 +405,12 @@ class BrowserRenderer:
                 return ElementType.RADIO
             elif input_type in ("submit", "button"):
                 return ElementType.BUTTON
-            else:
-                return ElementType.INPUT
-        elif tag == "select":
-            return ElementType.SELECT
-        elif tag == "textarea":
-            return ElementType.TEXTAREA
-        elif tag == "img":
-            return ElementType.IMAGE
-        elif tag == "video":
-            return ElementType.VIDEO
-        elif tag == "form":
-            return ElementType.FORM
-        elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            return ElementType.INPUT
+
+        if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             return ElementType.HEADING
-        elif tag == "p":
-            return ElementType.PARAGRAPH
-        elif tag in ("ul", "ol", "li"):
-            return ElementType.LIST
-        elif tag == "table":
-            return ElementType.TABLE
-        elif tag == "nav":
-            return ElementType.NAV
-        elif tag == "header":
-            return ElementType.HEADER
-        elif tag == "footer":
-            return ElementType.FOOTER
-        elif tag == "main":
-            return ElementType.MAIN
-        elif tag == "section":
-            return ElementType.SECTION
-        elif tag == "article":
-            return ElementType.ARTICLE
-        elif tag == "aside":
-            return ElementType.ASIDE
-        elif tag == "div":
-            return ElementType.DIV
-        elif tag == "span":
-            return ElementType.SPAN
-        else:
-            return ElementType.UNKNOWN
+
+        return type_map.get(tag, ElementType.UNKNOWN)
 
     def _is_interactive(self, elem_type: ElementType) -> bool:
         """Check if element type is interactive."""
@@ -462,71 +421,103 @@ class BrowserRenderer:
         )
 
     async def _extract_dom_playwright(self, page) -> Tuple[DOMNode, List[InteractiveElement]]:
-        """Extract DOM tree using Playwright."""
+        """Extract DOM tree using Playwright with better text extraction."""
 
-        # JavaScript to extract DOM structure
         js_code = """
         () => {
+            const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'svg', 'path', 'meta', 'link', 'br', 'hr']);
+            const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+            const LANDMARK_TAGS = new Set(['header', 'nav', 'main', 'footer', 'section', 'article', 'aside', 'form']);
+
+            function getDirectText(element) {
+                let text = '';
+                for (const child of element.childNodes) {
+                    if (child.nodeType === Node.TEXT_NODE) {
+                        text += child.textContent;
+                    }
+                }
+                return text.trim().replace(/\\s+/g, ' ').substring(0, 200);
+            }
+
+            function getFullText(element) {
+                return (element.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 300);
+            }
+
+            function getSelector(element) {
+                if (element.id) return '#' + element.id;
+
+                const tag = element.tagName.toLowerCase();
+
+                // Try name attribute for inputs
+                if (element.name) return tag + '[name="' + element.name + '"]';
+
+                // Try meaningful classes
+                if (element.className && typeof element.className === 'string') {
+                    const classes = element.className.trim().split(/\\s+/)
+                        .filter(c => c && !c.match(/^(w-|h-|p-|m-|flex|grid|text-|bg-|border)/))
+                        .slice(0, 2);
+                    if (classes.length > 0) {
+                        return tag + '.' + classes.join('.');
+                    }
+                }
+
+                // Fallback: use aria-label or role
+                if (element.getAttribute('aria-label')) {
+                    return tag + '[aria-label="' + element.getAttribute('aria-label').substring(0, 30) + '"]';
+                }
+
+                return tag;
+            }
+
             function extractNode(element, depth = 0) {
-                if (!element || depth > 15) return null;
+                if (!element || depth > 12) return null;
 
                 const tag = element.tagName?.toLowerCase() || '';
-                if (!tag || ['script', 'style', 'noscript', 'svg', 'path'].includes(tag)) {
-                    return null;
-                }
+                if (!tag || SKIP_TAGS.has(tag)) return null;
 
                 const rect = element.getBoundingClientRect();
                 const styles = window.getComputedStyle(element);
 
-                const attrs = {};
-                for (const attr of element.attributes || []) {
-                    attrs[attr.name] = attr.value;
-                }
-
-                // Get direct text content (not from children)
-                let text = '';
-                for (const child of element.childNodes) {
-                    if (child.nodeType === Node.TEXT_NODE) {
-                        text += child.textContent.trim() + ' ';
-                    }
-                }
-                text = text.trim().substring(0, 200);
-
-                // Build selector
-                let selector = tag;
-                if (element.id) {
-                    selector = '#' + element.id;
-                } else if (element.className && typeof element.className === 'string') {
-                    const classes = element.className.trim().split(/\\s+/).slice(0, 2);
-                    if (classes.length > 0 && classes[0]) {
-                        selector = tag + '.' + classes.join('.');
-                    }
-                }
-
                 const isVisible = styles.display !== 'none' &&
                                   styles.visibility !== 'hidden' &&
+                                  styles.opacity !== '0' &&
                                   rect.width > 0 && rect.height > 0;
+
+                // Skip invisible elements early
+                if (!isVisible && depth > 2) return null;
+
+                const attrs = {};
+                for (const attr of ['href', 'type', 'name', 'placeholder', 'value', 'aria-label', 'role']) {
+                    if (element.hasAttribute(attr)) {
+                        attrs[attr] = element.getAttribute(attr);
+                    }
+                }
+
+                // Check for button role
+                const role = element.getAttribute('role');
+                const isButton = tag === 'button' || role === 'button' ||
+                                 (tag === 'input' && ['submit', 'button'].includes(attrs.type));
 
                 const node = {
                     tag: tag,
-                    text: text,
+                    text: getDirectText(element),
+                    fullText: getFullText(element),
                     attrs: attrs,
-                    bbox: {
-                        x: rect.x,
-                        y: rect.y,
-                        width: rect.width,
-                        height: rect.height
-                    },
-                    selector: selector,
+                    bbox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                    selector: getSelector(element),
                     isVisible: isVisible,
+                    isInteractive: INTERACTIVE_TAGS.has(tag) || isButton || role === 'link',
+                    isLandmark: LANDMARK_TAGS.has(tag),
                     children: []
                 };
 
-                // Process children
-                for (const child of element.children) {
-                    const childNode = extractNode(child, depth + 1);
-                    if (childNode) {
-                        node.children.push(childNode);
+                // Only recurse for visible elements or landmarks
+                if (isVisible || node.isLandmark) {
+                    for (const child of element.children) {
+                        const childNode = extractNode(child, depth + 1);
+                        if (childNode) {
+                            node.children.push(childNode);
+                        }
                     }
                 }
 
@@ -539,9 +530,8 @@ class BrowserRenderer:
 
         dom_data = await page.evaluate(js_code)
 
-        # Convert to our DOM structure
         interactive_elements = []
-        element_index = [0]  # Use list to allow mutation in nested function
+        element_index = [0]
 
         def convert_node(data: Dict, depth: int = 0) -> Optional[DOMNode]:
             if not data:
@@ -553,12 +543,22 @@ class BrowserRenderer:
                 bbox = BoundingBox(b['x'], b['y'], b['width'], b['height'])
 
             elem_type = self._get_element_type(data['tag'], data.get('attrs', {}))
-            is_interactive = self._is_interactive(elem_type)
+
+            # Override if marked as interactive
+            if data.get('isInteractive') and elem_type == ElementType.DIV:
+                role = data.get('attrs', {}).get('role', '')
+                if role == 'button':
+                    elem_type = ElementType.BUTTON
+                elif role == 'link':
+                    elem_type = ElementType.LINK
+
+            is_interactive = data.get('isInteractive', False) or self._is_interactive(elem_type)
 
             node = DOMNode(
                 tag=data['tag'],
                 element_type=elem_type,
                 text=data.get('text', ''),
+                full_text=data.get('fullText', ''),
                 attributes=data.get('attrs', {}),
                 bbox=bbox,
                 selector=data.get('selector', ''),
@@ -571,11 +571,13 @@ class BrowserRenderer:
             # Track interactive elements
             if is_interactive and node.is_visible:
                 element_index[0] += 1
+                # Get better text for the element
+                text = data.get('fullText', '') or data.get('text', '')
                 interactive_elements.append(InteractiveElement(
                     index=element_index[0],
                     element_type=elem_type,
                     tag=data['tag'],
-                    text=data.get('text', ''),
+                    text=text,
                     selector=data.get('selector', ''),
                     xpath='',
                     bbox=bbox,
@@ -596,40 +598,29 @@ class BrowserRenderer:
         return root, interactive_elements
 
     async def render_url_async(self, url: str) -> str:
-        """
-        Render a URL as semantic ASCII (async version).
-
-        Args:
-            url: URL to render
-
-        Returns:
-            Semantic ASCII representation
-        """
+        """Render a URL as semantic ASCII (async)."""
         try:
             from playwright.async_api import async_playwright
         except ImportError:
             raise ImportError(
-                "Playwright is required for browser rendering. "
-                "Install with: pip install playwright && playwright install"
+                "Playwright required. Install: pip install playwright && playwright install"
             )
 
         async with async_playwright() as p:
-            # Launch browser
             browser_launcher = getattr(p, self.browser_type)
             browser = await browser_launcher.launch(headless=self.headless)
 
             try:
                 page = await browser.new_page()
                 await page.set_viewport_size({"width": 1280, "height": 800})
-
-                # Navigate
                 await page.goto(url, wait_until="networkidle", timeout=30000)
 
-                # Get page info
+                # Wait a bit for dynamic content
+                await page.wait_for_timeout(1000)
+
                 title = await page.title()
                 viewport = page.viewport_size
 
-                # Extract DOM
                 dom_tree, interactive_elements = await self._extract_dom_playwright(page)
 
                 page_info = PageInfo(
@@ -647,22 +638,12 @@ class BrowserRenderer:
                 await browser.close()
 
     def render_url(self, url: str) -> str:
-        """
-        Render a URL as semantic ASCII (sync version).
-
-        Args:
-            url: URL to render
-
-        Returns:
-            Semantic ASCII representation
-        """
+        """Render a URL as semantic ASCII (sync)."""
         import asyncio
 
-        # Handle event loop
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # We're in an async context, create a new loop
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(asyncio.run, self.render_url_async(url))
@@ -672,204 +653,123 @@ class BrowserRenderer:
         except RuntimeError:
             return asyncio.run(self.render_url_async(url))
 
-    def render_page(self, page) -> str:
-        """
-        Render an existing Playwright page as semantic ASCII.
-
-        Args:
-            page: Playwright Page object
-
-        Returns:
-            Semantic ASCII representation
-        """
-        import asyncio
-
-        async def _render():
-            title = await page.title()
-            viewport = page.viewport_size
-            url = page.url
-
-            dom_tree, interactive_elements = await self._extract_dom_playwright(page)
-
-            page_info = PageInfo(
-                url=url,
-                title=title,
-                width=viewport["width"] if viewport else 1280,
-                height=viewport["height"] if viewport else 800,
-                dom_tree=dom_tree,
-                interactive_elements=interactive_elements
-            )
-
-            return self.renderer.render(page_info)
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Return a coroutine for the caller to await
-                return asyncio.ensure_future(_render())
-            return loop.run_until_complete(_render())
-        except RuntimeError:
-            return asyncio.run(_render())
-
     def render_page_sync(self, page) -> str:
-        """
-        Render a Playwright sync page as semantic ASCII.
-
-        Args:
-            page: Playwright sync Page object
-
-        Returns:
-            Semantic ASCII representation
-        """
-        # For sync Playwright API
+        """Render an existing Playwright sync page."""
         title = page.title()
         viewport = page.viewport_size
         url = page.url
 
-        # Use sync evaluation
+        # Simplified sync JS extraction
         js_code = """
         () => {
-            function extractNode(element, depth = 0) {
-                if (!element || depth > 15) return null;
-                const tag = element.tagName?.toLowerCase() || '';
-                if (!tag || ['script', 'style', 'noscript', 'svg', 'path'].includes(tag)) {
-                    return null;
+            const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'svg', 'path', 'meta', 'link']);
+            const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+            const LANDMARK_TAGS = new Set(['header', 'nav', 'main', 'footer', 'section', 'article', 'aside', 'form']);
+
+            function getDirectText(el) {
+                let t = '';
+                for (const c of el.childNodes) if (c.nodeType === 3) t += c.textContent;
+                return t.trim().replace(/\\s+/g, ' ').substring(0, 200);
+            }
+
+            function getFullText(el) {
+                return (el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 300);
+            }
+
+            function getSelector(el) {
+                if (el.id) return '#' + el.id;
+                const tag = el.tagName.toLowerCase();
+                if (el.name) return tag + '[name="' + el.name + '"]';
+                if (el.className && typeof el.className === 'string') {
+                    const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.match(/^(w-|h-|p-|m-|flex)/)).slice(0,2);
+                    if (cls.length) return tag + '.' + cls.join('.');
                 }
-                const rect = element.getBoundingClientRect();
-                const styles = window.getComputedStyle(element);
+                return tag;
+            }
+
+            function extract(el, d = 0) {
+                if (!el || d > 12) return null;
+                const tag = el.tagName?.toLowerCase() || '';
+                if (!tag || SKIP_TAGS.has(tag)) return null;
+
+                const rect = el.getBoundingClientRect();
+                const st = window.getComputedStyle(el);
+                const vis = st.display !== 'none' && st.visibility !== 'hidden' && rect.width > 0;
+
+                if (!vis && d > 2) return null;
+
                 const attrs = {};
-                for (const attr of element.attributes || []) {
-                    attrs[attr.name] = attr.value;
-                }
-                let text = '';
-                for (const child of element.childNodes) {
-                    if (child.nodeType === Node.TEXT_NODE) {
-                        text += child.textContent.trim() + ' ';
-                    }
-                }
-                text = text.trim().substring(0, 200);
-                let selector = tag;
-                if (element.id) {
-                    selector = '#' + element.id;
-                } else if (element.className && typeof element.className === 'string') {
-                    const classes = element.className.trim().split(/\\s+/).slice(0, 2);
-                    if (classes.length > 0 && classes[0]) {
-                        selector = tag + '.' + classes.join('.');
-                    }
-                }
-                const isVisible = styles.display !== 'none' &&
-                                  styles.visibility !== 'hidden' &&
-                                  rect.width > 0 && rect.height > 0;
+                ['href','type','name','placeholder','value','aria-label','role'].forEach(a => {
+                    if (el.hasAttribute(a)) attrs[a] = el.getAttribute(a);
+                });
+
+                const role = el.getAttribute('role');
+                const isBtn = tag === 'button' || role === 'button';
+
                 const node = {
-                    tag: tag,
-                    text: text,
-                    attrs: attrs,
-                    bbox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-                    selector: selector,
-                    isVisible: isVisible,
+                    tag, text: getDirectText(el), fullText: getFullText(el), attrs,
+                    bbox: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+                    selector: getSelector(el), isVisible: vis,
+                    isInteractive: INTERACTIVE_TAGS.has(tag) || isBtn,
                     children: []
                 };
-                for (const child of element.children) {
-                    const childNode = extractNode(child, depth + 1);
-                    if (childNode) node.children.push(childNode);
-                }
+
+                if (vis) for (const c of el.children) { const cn = extract(c, d+1); if(cn) node.children.push(cn); }
                 return node;
             }
-            return extractNode(document.body);
+            return extract(document.body);
         }
         """
 
         dom_data = page.evaluate(js_code)
-
-        # Convert DOM data
         interactive_elements = []
-        element_index = [0]
+        idx = [0]
 
-        def convert_node(data, depth=0):
-            if not data:
-                return None
-
-            bbox = None
-            if data.get('bbox'):
-                b = data['bbox']
-                bbox = BoundingBox(b['x'], b['y'], b['width'], b['height'])
-
+        def convert(data, depth=0):
+            if not data: return None
+            bbox = BoundingBox(**data['bbox']) if data.get('bbox') else None
             elem_type = self._get_element_type(data['tag'], data.get('attrs', {}))
-            is_interactive = self._is_interactive(elem_type)
+            is_interactive = data.get('isInteractive', False) or self._is_interactive(elem_type)
 
             node = DOMNode(
-                tag=data['tag'],
-                element_type=elem_type,
-                text=data.get('text', ''),
-                attributes=data.get('attrs', {}),
-                bbox=bbox,
-                selector=data.get('selector', ''),
-                xpath='',
-                depth=depth,
-                is_visible=data.get('isVisible', True),
-                is_interactive=is_interactive
+                tag=data['tag'], element_type=elem_type, text=data.get('text', ''),
+                full_text=data.get('fullText', ''), attributes=data.get('attrs', {}),
+                bbox=bbox, selector=data.get('selector', ''), depth=depth,
+                is_visible=data.get('isVisible', True), is_interactive=is_interactive
             )
 
             if is_interactive and node.is_visible:
-                element_index[0] += 1
+                idx[0] += 1
                 interactive_elements.append(InteractiveElement(
-                    index=element_index[0],
-                    element_type=elem_type,
-                    tag=data['tag'],
-                    text=data.get('text', ''),
-                    selector=data.get('selector', ''),
-                    xpath='',
-                    bbox=bbox,
-                    attributes=data.get('attrs', {}),
-                    is_visible=True,
-                    is_enabled=True
+                    index=idx[0], element_type=elem_type, tag=data['tag'],
+                    text=data.get('fullText', '') or data.get('text', ''),
+                    selector=data.get('selector', ''), xpath='', bbox=bbox,
+                    attributes=data.get('attrs', {})
                 ))
 
-            for child_data in data.get('children', []):
-                child_node = convert_node(child_data, depth + 1)
-                if child_node:
-                    node.children.append(child_node)
-
+            for c in data.get('children', []):
+                cn = convert(c, depth+1)
+                if cn: node.children.append(cn)
             return node
 
-        dom_tree = convert_node(dom_data)
-
+        dom_tree = convert(dom_data)
         page_info = PageInfo(
-            url=url,
-            title=title,
+            url=url, title=title,
             width=viewport["width"] if viewport else 1280,
             height=viewport["height"] if viewport else 800,
-            dom_tree=dom_tree,
-            interactive_elements=interactive_elements
+            dom_tree=dom_tree, interactive_elements=interactive_elements
         )
-
         return self.renderer.render(page_info)
 
 
 class AgentBrowserContext:
-    """
-    High-level interface for AI agents to interact with web pages.
-
-    Provides:
-    - Semantic ASCII rendering of pages
-    - Interactive element listing with selectors
-    - Action suggestions
-    - State tracking
-    """
+    """High-level interface for AI agents to interact with web pages."""
 
     def __init__(self, width: int = 100, headless: bool = True):
-        """
-        Initialize agent browser context.
-
-        Args:
-            width: ASCII output width
-            headless: Run browser in headless mode
-        """
         self.width = width
         self.headless = headless
         self.renderer = BrowserRenderer(width=width, headless=headless)
         self._history: List[str] = []
-        self._current_url: Optional[str] = None
 
     def get_page_context(
         self,
@@ -878,149 +778,49 @@ class AgentBrowserContext:
         task: Optional[str] = None,
         include_actions: bool = True
     ) -> str:
-        """
-        Get full context for an AI agent.
+        """Get full context for an AI agent."""
 
-        Args:
-            url: URL to render (if no page provided)
-            page: Existing Playwright page object
-            task: Current task description
-            include_actions: Include suggested actions
-
-        Returns:
-            Complete context string for LLM
-        """
-        # Render page
         if page is not None:
-            if hasattr(page, 'title'):
-                # Check if it's sync or async
-                try:
-                    # Try sync first
-                    ascii_content = self.renderer.render_page_sync(page)
-                except Exception:
-                    ascii_content = self.renderer.render_page(page)
+            try:
+                ascii_content = self.renderer.render_page_sync(page)
+            except Exception:
+                ascii_content = self.renderer.render_page(page)
         elif url:
             ascii_content = self.renderer.render_url(url)
-            self._current_url = url
             self._history.append(url)
         else:
             raise ValueError("Either url or page must be provided")
 
-        # Build context
-        lines = [
-            "# Browser Agent Context",
-            ""
-        ]
+        lines = ["# Browser Agent Context", ""]
 
         if task:
-            lines.extend([
-                "## Current Task",
-                task,
-                ""
-            ])
+            lines.extend(["## Task", task, ""])
 
         if self._history:
-            lines.extend([
-                "## Navigation History",
-                " → ".join(self._history[-5:]),  # Last 5 pages
-                ""
-            ])
+            lines.extend(["## History", " → ".join(self._history[-3:]), ""])
 
-        lines.extend([
-            "## Page Content",
-            "",
-            ascii_content,
-            ""
-        ])
+        lines.extend([ascii_content, ""])
 
         if include_actions:
             lines.extend([
-                "## Available Actions",
-                "",
-                "You can perform these actions:",
-                "- `click(selector)` - Click an element",
-                "- `type(selector, text)` - Type text into an input",
-                "- `select(selector, value)` - Select dropdown option",
-                "- `scroll(direction)` - Scroll up/down",
-                "- `navigate(url)` - Go to a URL",
-                "- `back()` - Go back",
-                "- `wait(ms)` - Wait for content to load",
-                "",
-                "Use the element selectors from the Interactive Elements list above.",
+                "## Actions",
+                "Use these commands with the selectors above:",
+                "  click(selector)      - Click element",
+                "  type(selector, text) - Enter text",
+                "  select(selector, val)- Select option",
+                "  scroll(up/down)      - Scroll page",
+                "  navigate(url)        - Go to URL",
                 ""
-            ])
-
-        return "\n".join(lines)
-
-    def format_action_result(
-        self,
-        action: str,
-        success: bool,
-        message: str = "",
-        new_page_content: Optional[str] = None
-    ) -> str:
-        """
-        Format the result of an action for the agent.
-
-        Args:
-            action: The action that was performed
-            success: Whether the action succeeded
-            message: Additional message
-            new_page_content: New page ASCII if page changed
-
-        Returns:
-            Formatted result string
-        """
-        status = "SUCCESS" if success else "FAILED"
-        lines = [
-            f"## Action Result: {status}",
-            f"Action: {action}",
-        ]
-
-        if message:
-            lines.append(f"Message: {message}")
-
-        if new_page_content:
-            lines.extend([
-                "",
-                "## Updated Page Content",
-                "",
-                new_page_content
             ])
 
         return "\n".join(lines)
 
 
 def render_url(url: str, width: int = 100) -> str:
-    """
-    Convenience function to render a URL as semantic ASCII.
-
-    Args:
-        url: URL to render
-        width: Output width
-
-    Returns:
-        Semantic ASCII representation
-    """
-    renderer = BrowserRenderer(width=width)
-    return renderer.render_url(url)
+    """Render a URL as semantic ASCII."""
+    return BrowserRenderer(width=width).render_url(url)
 
 
-def get_agent_context(
-    url: str,
-    task: Optional[str] = None,
-    width: int = 100
-) -> str:
-    """
-    Get browser context for an AI agent.
-
-    Args:
-        url: URL to render
-        task: Task description
-        width: Output width
-
-    Returns:
-        Agent context string
-    """
-    agent = AgentBrowserContext(width=width)
-    return agent.get_page_context(url=url, task=task)
+def get_agent_context(url: str, task: Optional[str] = None, width: int = 100) -> str:
+    """Get browser context for an AI agent."""
+    return AgentBrowserContext(width=width).get_page_context(url=url, task=task)
