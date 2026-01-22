@@ -5,7 +5,7 @@ Provides a simple interface for capturing frames from webcams
 and video files using OpenCV.
 """
 
-from typing import Optional, Generator, Tuple
+from typing import Optional, Generator, Tuple, Union
 import cv2
 import numpy as np
 
@@ -20,7 +20,7 @@ class Camera:
 
     def __init__(
         self,
-        source: int | str = 0,
+        source: Union[int, str] = 0,
         width: Optional[int] = None,
         height: Optional[int] = None,
         fps: Optional[int] = None
