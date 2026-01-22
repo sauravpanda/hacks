@@ -600,14 +600,91 @@ def cmd_record(args):
     return 0
 
 
+def _view_frames_interactive(frames, video_path):
+    """Interactive frame viewer - show one frame at a time."""
+    from .display import Display
+
+    display = Display(show_stats=False)
+
+    try:
+        from blessed import Terminal
+        term = Terminal()
+    except ImportError:
+        # Fallback: just print frames sequentially
+        for i, frame in enumerate(frames):
+            timestamp = f"{int(frame.timestamp // 60):02d}:{frame.timestamp % 60:05.2f}"
+            print(f"\n=== Frame {i + 1}/{len(frames)} (t={timestamp}) ===\n")
+            print(frame.ascii_art)
+            if i < len(frames) - 1:
+                input("\nPress Enter for next frame...")
+        return
+
+    current_idx = 0
+    running = True
+
+    with term.cbreak(), term.hidden_cursor():
+        while running:
+            frame = frames[current_idx]
+            timestamp = f"{int(frame.timestamp // 60):02d}:{frame.timestamp % 60:05.2f}"
+
+            # Build display
+            display.clear()
+
+            # Header
+            header = f"Frame {current_idx + 1}/{len(frames)} | t={timestamp} | {video_path}"
+            print(f"\033[1m{header}\033[0m")
+            print("─" * len(header))
+            print()
+
+            # Frame content
+            print(frame.ascii_art)
+
+            # Footer with controls
+            print()
+            print("\033[90m[←/→] prev/next  [j/k] prev/next  [q] quit  [1-9] jump to frame\033[0m")
+
+            # Handle input
+            key = term.inkey(timeout=None)
+            key_str = str(key).lower() if hasattr(key, 'lower') else str(key)
+
+            if key_str in ('q', '\x1b'):
+                running = False
+            elif key.name == 'KEY_RIGHT' or key_str in ('l', 'j', ' '):
+                current_idx = min(current_idx + 1, len(frames) - 1)
+            elif key.name == 'KEY_LEFT' or key_str in ('h', 'k'):
+                current_idx = max(current_idx - 1, 0)
+            elif key.name == 'KEY_HOME' or key_str == '0':
+                current_idx = 0
+            elif key.name == 'KEY_END' or key_str == '$':
+                current_idx = len(frames) - 1
+            elif key_str.isdigit() and key_str != '0':
+                # Jump to frame (1-indexed)
+                target = int(key_str) - 1
+                if 0 <= target < len(frames):
+                    current_idx = target
+
+
 def cmd_llm(args):
     """Handle LLM context generation command."""
-    from .llm import video_to_llm_prompt, image_to_llm_context
+    from .llm import video_to_llm_prompt, image_to_llm_context, LLMContextBuilder
 
     input_path = args.input
+    view_mode = getattr(args, 'view', False)
 
     if input_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
-        # Video file
+        if view_mode:
+            # Interactive frame viewer mode
+            builder = LLMContextBuilder(width=args.width)
+            context = builder.video_to_context(
+                input_path,
+                sample_interval=getattr(args, 'interval', None),
+                max_frames=args.frames,
+                fps=getattr(args, 'fps', None)
+            )
+            _view_frames_interactive(context.sampled_frames, input_path)
+            return 0
+
+        # Video file - generate prompt
         prompt = video_to_llm_prompt(
             input_path,
             task=args.task,
@@ -617,6 +694,15 @@ def cmd_llm(args):
             fps=getattr(args, 'fps', None)
         )
     else:
+        if view_mode:
+            # For images, just show the single frame
+            from PIL import Image as PILImage
+            builder = LLMContextBuilder(width=args.width)
+            image = PILImage.open(input_path)
+            frame_ctx = builder.frame_to_context(image)
+            print(frame_ctx.ascii_art)
+            return 0
+
         # Image file
         prompt = image_to_llm_context(
             input_path,
@@ -630,7 +716,6 @@ def cmd_llm(args):
         print(f"Saved LLM context to: {args.output}")
 
         # Show stats
-        from .llm import LLMContextBuilder
         tokens = len(prompt) // 4
         print(f"Estimated tokens: ~{tokens:,}")
     else:
@@ -793,6 +878,7 @@ def main():
     llm_parser.add_argument("-n", "--frames", type=int, default=5, help="Max frames for video")
     llm_parser.add_argument("--interval", type=float, help="Seconds between frames (default: 2.0)")
     llm_parser.add_argument("--fps", type=float, help="Frames per second to sample (alternative to --interval)")
+    llm_parser.add_argument("--view", action="store_true", help="Interactive viewer: show one frame at a time")
     llm_parser.set_defaults(func=cmd_llm)
 
     # Browse command
